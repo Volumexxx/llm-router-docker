@@ -1,0 +1,9 @@
+node_modules
+dist
+coverage
+.vite
+.turbo
+.pnpm-store
+data
+.env
+*.log
