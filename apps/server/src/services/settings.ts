@@ -29,5 +29,5 @@ export function hasInitializationState(sqlite: DatabaseSync): boolean {
     .prepare("SELECT COUNT(*) AS count FROM admin_users")
     .get() as { count: number };
 
-  return adminCount.count > 0 && Boolean(getSetting(sqlite, "gateway_api_key_hash"));
+  return adminCount.count > 0;
 }

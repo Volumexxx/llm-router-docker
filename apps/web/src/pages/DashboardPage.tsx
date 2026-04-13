@@ -65,16 +65,37 @@ export function DashboardPage({ dashboard, range, setRange }: DashboardPageProps
         </div>
       </article>
 
-      <section className="card-grid">
-        {dashboard.providerCards.slice(0, 6).map((card) => (
-          <DashboardCardView key={card.key} title={card.label} card={card} />
-        ))}
+      <section className="stack">
+        <div className="panel-head">
+          <h3>Provider 排行</h3>
+        </div>
+        <div className="card-grid">
+          {dashboard.providerCards.slice(0, 6).map((card) => (
+            <DashboardCardView key={card.key} title={card.label} card={card} />
+          ))}
+        </div>
       </section>
 
-      <section className="card-grid">
-        {dashboard.modelCards.slice(0, 6).map((card) => (
-          <DashboardCardView key={card.key} title={card.label} card={card} />
-        ))}
+      <section className="stack">
+        <div className="panel-head">
+          <h3>模型排行</h3>
+        </div>
+        <div className="card-grid">
+          {dashboard.modelCards.slice(0, 6).map((card) => (
+            <DashboardCardView key={card.key} title={card.label} card={card} />
+          ))}
+        </div>
+      </section>
+
+      <section className="stack">
+        <div className="panel-head">
+          <h3>API Key 排行</h3>
+        </div>
+        <div className="card-grid">
+          {dashboard.apiKeyCards.slice(0, 6).map((card) => (
+            <DashboardCardView key={card.key} title={card.label} card={card} />
+          ))}
+        </div>
       </section>
     </div>
   );

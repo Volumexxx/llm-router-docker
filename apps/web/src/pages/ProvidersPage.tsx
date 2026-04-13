@@ -34,31 +34,59 @@ export function ProvidersPage({
       <section className="panel">
         <div className="panel-head">
           <h3>新增 Provider</h3>
-          <span className="muted">仅支持 OpenAI 兼容上游</span>
+          <span className="muted">当前仅支持 OpenAI 兼容上游。</span>
         </div>
         <div className="form-grid">
           <label>
             <span>名称</span>
-            <input value={newProvider.name} onChange={(event) => setNewProvider((current) => ({ ...current, name: event.target.value }))} />
+            <input
+              value={newProvider.name}
+              onChange={(event) =>
+                setNewProvider((current) => ({ ...current, name: event.target.value }))
+              }
+            />
           </label>
           <label>
             <span>接口地址</span>
-            <input value={newProvider.baseUrl} onChange={(event) => setNewProvider((current) => ({ ...current, baseUrl: event.target.value }))} placeholder="https://api.openai.com/v1" />
+            <input
+              value={newProvider.baseUrl}
+              onChange={(event) =>
+                setNewProvider((current) => ({ ...current, baseUrl: event.target.value }))
+              }
+              placeholder="https://api.openai.com/v1"
+            />
           </label>
           <label>
             <span>真实 API Key</span>
-            <input type="password" value={newProvider.apiKey} onChange={(event) => setNewProvider((current) => ({ ...current, apiKey: event.target.value }))} />
+            <input
+              type="password"
+              value={newProvider.apiKey}
+              onChange={(event) =>
+                setNewProvider((current) => ({ ...current, apiKey: event.target.value }))
+              }
+            />
           </label>
           <label>
             <span>测试超时 (ms)</span>
-            <input type="number" value={newProvider.testTimeoutMs} onChange={(event) => setNewProvider((current) => ({ ...current, testTimeoutMs: Number(event.target.value) }))} />
+            <input
+              type="number"
+              value={newProvider.testTimeoutMs}
+              onChange={(event) =>
+                setNewProvider((current) => ({
+                  ...current,
+                  testTimeoutMs: Number(event.target.value)
+                }))
+              }
+            />
           </label>
         </div>
         <label className="inline">
           <input
             type="checkbox"
             checked={newProvider.enabled}
-            onChange={(event) => setNewProvider((current) => ({ ...current, enabled: event.target.checked }))}
+            onChange={(event) =>
+              setNewProvider((current) => ({ ...current, enabled: event.target.checked }))
+            }
           />
           <span>创建后立即启用</span>
         </label>
@@ -100,27 +128,66 @@ export function ProvidersPage({
                 <th>Key 预览</th>
                 <th>超时</th>
                 <th>启用</th>
-                <th>动作</th>
+                <th>操作</th>
               </tr>
             </thead>
             <tbody>
               {providers.map((provider) => (
                 <tr key={provider.id}>
-                  <td><input value={provider.name} onChange={(event) => updateProviderField(provider.id, "name", event.target.value)} /></td>
-                  <td><input value={provider.baseUrl} onChange={(event) => updateProviderField(provider.id, "baseUrl", event.target.value)} /></td>
+                  <td>
+                    <input
+                      value={provider.name}
+                      onChange={(event) =>
+                        updateProviderField(provider.id, "name", event.target.value)
+                      }
+                    />
+                  </td>
+                  <td>
+                    <input
+                      value={provider.baseUrl}
+                      onChange={(event) =>
+                        updateProviderField(provider.id, "baseUrl", event.target.value)
+                      }
+                    />
+                  </td>
                   <td>
                     <div className="stack compact-stack">
                       <span>{provider.apiKeyPreview ?? "-"}</span>
                       <input
                         type="password"
-                        placeholder="留空则不更换"
+                        placeholder="留空则不替换"
                         value={providerSecrets[provider.id] ?? ""}
-                        onChange={(event) => setProviderSecrets((current) => ({ ...current, [provider.id]: event.target.value }))}
+                        onChange={(event) =>
+                          setProviderSecrets((current) => ({
+                            ...current,
+                            [provider.id]: event.target.value
+                          }))
+                        }
                       />
                     </div>
                   </td>
-                  <td><input type="number" value={provider.testTimeoutMs} onChange={(event) => updateProviderField(provider.id, "testTimeoutMs", Number(event.target.value))} /></td>
-                  <td><input type="checkbox" checked={provider.enabled} onChange={(event) => updateProviderField(provider.id, "enabled", event.target.checked)} /></td>
+                  <td>
+                    <input
+                      type="number"
+                      value={provider.testTimeoutMs}
+                      onChange={(event) =>
+                        updateProviderField(
+                          provider.id,
+                          "testTimeoutMs",
+                          Number(event.target.value)
+                        )
+                      }
+                    />
+                  </td>
+                  <td>
+                    <input
+                      type="checkbox"
+                      checked={provider.enabled}
+                      onChange={(event) =>
+                        updateProviderField(provider.id, "enabled", event.target.checked)
+                      }
+                    />
+                  </td>
                   <td>
                     <div className="action-row">
                       <button
@@ -133,10 +200,15 @@ export function ProvidersPage({
                               baseUrl: provider.baseUrl,
                               enabled: provider.enabled,
                               testTimeoutMs: provider.testTimeoutMs,
-                              ...(providerSecrets[provider.id] ? { apiKey: providerSecrets[provider.id] } : {})
+                              ...(providerSecrets[provider.id]
+                                ? { apiKey: providerSecrets[provider.id] }
+                                : {})
                             })
                             .then(async () => {
-                              setProviderSecrets((current) => ({ ...current, [provider.id]: "" }));
+                              setProviderSecrets((current) => ({
+                                ...current,
+                                [provider.id]: ""
+                              }));
                               await refreshProviders();
                               onNotice(`Provider ${provider.name} 已更新`);
                             })
@@ -153,7 +225,9 @@ export function ProvidersPage({
                             .test(provider.id)
                             .then((result) => {
                               onNotice(
-                                `${provider.name} 测试${result.success ? "成功" : "失败"}，耗时 ${result.responseTimeMs}ms，消息：${result.message}`
+                                `${provider.name} 测试${result.success ? "成功" : "失败"}，耗时 ${
+                                  result.responseTimeMs
+                                }ms，消息：${result.message}`
                               );
                             })
                             .catch(onError);

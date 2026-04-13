@@ -19,6 +19,9 @@ export interface AuditLogInput {
   providerName?: string | null;
   modelAlias?: string | null;
   upstreamModel?: string | null;
+  apiKeyId?: string | null;
+  apiKeyName?: string | null;
+  apiKeyMaskedPreview?: string | null;
   isStream?: boolean;
   statusCategory: z.infer<typeof auditStatusSchema>;
   httpStatus: number;
@@ -46,6 +49,9 @@ export function writeAuditLog(sqlite: DatabaseSync, input: AuditLogInput): void 
           provider_name,
           model_alias,
           upstream_model,
+          api_key_id,
+          api_key_name,
+          api_key_masked_preview,
           is_stream,
           status_category,
           http_status,
@@ -59,7 +65,7 @@ export function writeAuditLog(sqlite: DatabaseSync, input: AuditLogInput): void 
           client_ip,
           user_agent
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `
     )
     .run(
@@ -71,6 +77,9 @@ export function writeAuditLog(sqlite: DatabaseSync, input: AuditLogInput): void 
       input.providerName ?? null,
       input.modelAlias ?? null,
       input.upstreamModel ?? null,
+      input.apiKeyId ?? null,
+      input.apiKeyName ?? null,
+      input.apiKeyMaskedPreview ?? null,
       input.isStream ? 1 : 0,
       input.statusCategory,
       input.httpStatus,
@@ -107,6 +116,10 @@ export function queryAuditLogs(sqlite: DatabaseSync, input: AuditQueryInput) {
   if (input.providerId) {
     clauses.push("provider_id = ?");
     params.push(input.providerId);
+  }
+  if (input.apiKeyId) {
+    clauses.push("api_key_id = ?");
+    params.push(input.apiKeyId);
   }
   if (input.modelAlias) {
     clauses.push("model_alias = ?");

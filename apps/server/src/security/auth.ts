@@ -1,9 +1,9 @@
 import type { FastifyReply, FastifyRequest } from "fastify";
 
+import { clampText } from "../lib/utils.ts";
+import { writeSecurityAuditFromRequest } from "../services/audit.ts";
 import { getClientIp, isIpAllowed } from "./ip.ts";
 import { loadSessionUserByToken } from "./session.ts";
-import { writeSecurityAuditFromRequest } from "../services/audit.ts";
-import { clampText } from "../lib/utils.ts";
 
 export async function enforceAdminIpAllowlist(
   request: FastifyRequest,
@@ -103,12 +103,18 @@ export function rejectGatewayRequest(
   reply: FastifyReply,
   code: string,
   status: number,
-  message: string
+  message: string,
+  options?: {
+    statusCategory?: "unauthorized" | "configuration_error" | "security_policy";
+    endpointType?: "model_list" | "security";
+  }
 ): void {
   writeSecurityAuditFromRequest(request.server.appCtx.database.sqlite, request, {
     requestId: request.id,
-    endpointType: request.url.startsWith("/v1/models") ? "model_list" : "security",
-    statusCategory: status === 401 ? "unauthorized" : "security_policy",
+    endpointType:
+      options?.endpointType ?? (request.url.startsWith("/v1/models") ? "model_list" : "security"),
+    statusCategory:
+      options?.statusCategory ?? (status === 401 ? "unauthorized" : "security_policy"),
     httpStatus: status,
     latencyMs: 0,
     errorCode: code,

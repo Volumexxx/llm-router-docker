@@ -76,8 +76,7 @@ const rawConfigSchema = z.object({
   API_CIDR_WHITELIST: z.string().optional(),
   CONFIG_ENCRYPTION_KEY: z.string().min(16),
   BOOTSTRAP_ADMIN_USERNAME: z.string().min(1).optional(),
-  BOOTSTRAP_ADMIN_PASSWORD: z.string().min(8).optional(),
-  BOOTSTRAP_GATEWAY_API_KEY: z.string().min(8).optional()
+  BOOTSTRAP_ADMIN_PASSWORD: z.string().min(8).optional()
 });
 
 export interface RuntimeConfig {
@@ -105,7 +104,6 @@ export interface RuntimeConfig {
   configEncryptionKey: string;
   bootstrapAdminUsername: string | null;
   bootstrapAdminPassword: string | null;
-  bootstrapGatewayApiKey: string | null;
   cookieName: string;
 }
 
@@ -159,7 +157,6 @@ export function resolveConfig(
     configEncryptionKey: raw.CONFIG_ENCRYPTION_KEY,
     bootstrapAdminUsername: raw.BOOTSTRAP_ADMIN_USERNAME ?? null,
     bootstrapAdminPassword: raw.BOOTSTRAP_ADMIN_PASSWORD ?? null,
-    bootstrapGatewayApiKey: raw.BOOTSTRAP_GATEWAY_API_KEY ?? null,
     cookieName: "llm_router_admin"
   };
 }

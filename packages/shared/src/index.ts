@@ -1,6 +1,6 @@
-export const MODEL_ALIAS_REGEX = /^[A-Za-z0-9._:-]+$/;
-
 import { z } from "zod";
+
+export const MODEL_ALIAS_REGEX = /^[A-Za-z0-9._:-]+$/;
 
 export const endpointTypeSchema = z.enum([
   "model_list",
@@ -49,7 +49,7 @@ export const modelAliasCreateSchema = z.object({
     .string()
     .min(1)
     .max(120)
-    .regex(MODEL_ALIAS_REGEX, "模型别名仅允许字母、数字、点、下划线、冒号和短横线"),
+    .regex(MODEL_ALIAS_REGEX, "模型别名只允许字母、数字、点、下划线、冒号和短横线"),
   displayName: z.string().min(1).max(120),
   enabled: z.boolean().default(true)
 });
@@ -59,7 +59,7 @@ export const modelAliasUpdateSchema = z.object({
     .string()
     .min(1)
     .max(120)
-    .regex(MODEL_ALIAS_REGEX, "模型别名仅允许字母、数字、点、下划线、冒号和短横线")
+    .regex(MODEL_ALIAS_REGEX, "模型别名只允许字母、数字、点、下划线、冒号和短横线")
     .optional(),
   displayName: z.string().min(1).max(120).optional(),
   enabled: z.boolean().optional()
@@ -86,12 +86,34 @@ export const runtimeOrderSchema = z.object({
   bindingIds: z.array(z.string().uuid()).min(1)
 });
 
-export const gatewayRotateSchema = z.object({
-  newGatewayApiKey: z.string().min(8).max(512)
+export const apiKeyCreateSchema = z.object({
+  name: z.string().min(1).max(120)
+});
+
+export const apiKeyUpdateSchema = z.object({
+  name: z.string().min(1).max(120).optional(),
+  enabled: z.boolean().optional()
+});
+
+export const apiKeyListQuerySchema = z.object({
+  includeDeleted: z
+    .preprocess((value) => {
+      if (typeof value === "boolean") {
+        return value;
+      }
+
+      if (typeof value !== "string") {
+        return false;
+      }
+
+      return ["1", "true", "yes", "on"].includes(value.toLowerCase());
+    }, z.boolean())
+    .default(false)
 });
 
 export const auditQuerySchema = z.object({
   providerId: z.string().uuid().optional(),
+  apiKeyId: z.string().uuid().optional(),
   modelAlias: z.string().optional(),
   statusCategory: auditStatusSchema.optional(),
   endpointType: endpointTypeSchema.optional(),
@@ -152,6 +174,7 @@ export interface DashboardSummary {
   trend: TrendPoint[];
   providerCards: DashboardCard[];
   modelCards: DashboardCard[];
+  apiKeyCards: DashboardCard[];
 }
 
 export function estimateCost(
@@ -179,6 +202,17 @@ export function maskSecret(value: string | null | undefined): string | null {
   }
 
   return `${value.slice(0, 3)}***${value.slice(-3)}`;
+}
+
+export function formatApiKeyLabel(
+  name: string | null | undefined,
+  maskedPreview: string | null | undefined
+): string {
+  if (name && maskedPreview) {
+    return `${name} (${maskedPreview})`;
+  }
+
+  return name ?? maskedPreview ?? "未知 API Key";
 }
 
 export function calculatePercentile(values: number[], percentile: number): number {

@@ -116,5 +116,34 @@ export const migrations: SqlMigration[] = [
       CREATE INDEX IF NOT EXISTS idx_audit_logs_endpoint_type
       ON audit_logs(endpoint_type);
     `
+  },
+  {
+    version: "002_api_keys",
+    sql: `
+      CREATE TABLE IF NOT EXISTS api_keys (
+        id TEXT PRIMARY KEY NOT NULL,
+        name TEXT NOT NULL,
+        key_hash TEXT NOT NULL,
+        masked_preview TEXT NOT NULL,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        deleted_at TEXT,
+        last_used_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      ALTER TABLE audit_logs ADD COLUMN api_key_id TEXT;
+      ALTER TABLE audit_logs ADD COLUMN api_key_name TEXT;
+      ALTER TABLE audit_logs ADD COLUMN api_key_masked_preview TEXT;
+
+      CREATE INDEX IF NOT EXISTS idx_api_keys_enabled_deleted
+      ON api_keys(enabled, deleted_at);
+
+      CREATE INDEX IF NOT EXISTS idx_api_keys_created_at
+      ON api_keys(created_at);
+
+      CREATE INDEX IF NOT EXISTS idx_audit_logs_api_key_id
+      ON audit_logs(api_key_id);
+    `
   }
 ];

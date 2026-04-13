@@ -1,16 +1,19 @@
+import type { DatabaseSync } from "node:sqlite";
+
 import type { FastifyRequest } from "fastify";
 
 import type { RuntimeConfig } from "../config.ts";
 import { deriveBaseUrl } from "../security/ip.ts";
+import { getApiKeyCounts } from "./api-keys.ts";
 
 export function buildSystemStatus(
+  sqlite: DatabaseSync,
   request: FastifyRequest,
   config: RuntimeConfig,
   state: {
     ready: boolean;
     readyErrors: string[];
     appliedMigrations: string[];
-    gatewayApiKeyHash: string | null;
   }
 ) {
   const detectedBaseUrl = deriveBaseUrl(request, config);
@@ -18,9 +21,10 @@ export function buildSystemStatus(
   const adminBaseUrl =
     config.adminExternalBaseUrl ?? `${config.externalBaseUrl ?? detectedBaseUrl}/admin`;
   const warnings: string[] = [];
+  const apiKeyCounts = getApiKeyCounts(sqlite);
 
   if (!config.trustProxy && request.headers["x-forwarded-host"]) {
-    warnings.push("当前收到代理头，但 TRUST_PROXY 未启用，来源 IP 与 HTTPS 检测可能不准确。");
+    warnings.push("检测到代理头，但 TRUST_PROXY 未启用，来源 IP 与 HTTPS 判断可能不准确。");
   }
 
   if (config.externalBaseUrl) {
@@ -29,6 +33,10 @@ export function buildSystemStatus(
     if (configured.host !== detected.host || configured.protocol !== detected.protocol) {
       warnings.push("检测到代理头与 EXTERNAL_BASE_URL 不一致，请检查反向代理配置。");
     }
+  }
+
+  if (apiKeyCounts.activeApiKeyCount === 0) {
+    warnings.push("当前还没有可用的 API Key，请先登录后台创建至少一把启用中的 Key。");
   }
 
   return {
@@ -57,7 +65,8 @@ export function buildSystemStatus(
     adminWhitelistEnabled: config.adminCidrs.length > 0,
     apiWhitelistEnabled: config.apiCidrs.length > 0,
     appliedMigrations: state.appliedMigrations,
-    gatewayKeyConfigured: Boolean(state.gatewayApiKeyHash),
+    activeApiKeyCount: apiKeyCounts.activeApiKeyCount,
+    totalApiKeyCount: apiKeyCounts.totalApiKeyCount,
     warnings
   };
 }

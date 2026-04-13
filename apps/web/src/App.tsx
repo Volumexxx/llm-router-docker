@@ -1,14 +1,33 @@
 import { useEffect, useMemo, useState } from "react";
 
-import { ApiError, api, type BindingItem, type BindingPayload, type ModelItem, type ProviderItem } from "./lib/api.ts";
-import { DashboardPage } from "./pages/DashboardPage.tsx";
-import { ProvidersPage } from "./pages/ProvidersPage.tsx";
-import { ModelsPage } from "./pages/ModelsPage.tsx";
+import {
+  ApiError,
+  api,
+  type ApiKeyItem,
+  type AuditResponse,
+  type BindingItem,
+  type BindingPayload,
+  type DashboardSummary,
+  type ModelItem,
+  type ProviderItem,
+  type SystemStatus
+} from "./lib/api.ts";
 import { AuditPage } from "./pages/AuditPage.tsx";
-import { SystemPage } from "./pages/SystemPage.tsx";
+import { DashboardPage } from "./pages/DashboardPage.tsx";
 import { LoginPage } from "./pages/LoginPage.tsx";
+import { ModelsPage } from "./pages/ModelsPage.tsx";
+import { ProvidersPage } from "./pages/ProvidersPage.tsx";
+import { SystemPage } from "./pages/SystemPage.tsx";
 
 type Section = "dashboard" | "providers" | "models" | "audit" | "system";
+type AuditFilters = {
+  providerId: string;
+  apiKeyId: string;
+  modelAlias: string;
+  statusCategory: string;
+  endpointType: string;
+  page: number;
+};
 
 const defaultProviderForm = {
   name: "",
@@ -32,6 +51,18 @@ const defaultBindingForm: BindingPayload = {
   enabled: true
 };
 
+function buildApiKeyDrafts(items: ApiKeyItem[]) {
+  return Object.fromEntries(
+    items.map((item) => [
+      item.id,
+      {
+        name: item.name,
+        enabled: item.enabled
+      }
+    ])
+  );
+}
+
 export default function App() {
   const [user, setUser] = useState<{ id: string; username: string } | null>(null);
   const [loading, setLoading] = useState(true);
@@ -48,19 +79,25 @@ export default function App() {
   const [bindingDrafts, setBindingDrafts] = useState<Record<string, BindingPayload>>({});
 
   const [dashboardRange, setDashboardRange] = useState<"day" | "week" | "month">("day");
-  const [dashboard, setDashboard] = useState<any>(null);
+  const [dashboard, setDashboard] = useState<DashboardSummary | null>(null);
 
-  const [audit, setAudit] = useState<any>(null);
-  const [auditFilters, setAuditFilters] = useState({
+  const [audit, setAudit] = useState<AuditResponse | null>(null);
+  const [auditFilters, setAuditFilters] = useState<AuditFilters>({
     providerId: "",
+    apiKeyId: "",
     modelAlias: "",
     statusCategory: "",
     endpointType: "",
     page: 1
   });
 
-  const [systemStatus, setSystemStatus] = useState<any>(null);
-  const [newGatewayKey, setNewGatewayKey] = useState("");
+  const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null);
+  const [apiKeys, setApiKeys] = useState<ApiKeyItem[]>([]);
+  const [auditApiKeys, setAuditApiKeys] = useState<ApiKeyItem[]>([]);
+  const [apiKeyDrafts, setApiKeyDrafts] = useState<Record<string, { name: string; enabled: boolean }>>({});
+  const [newApiKeyName, setNewApiKeyName] = useState("");
+  const [createdApiKeyPlaintext, setCreatedApiKeyPlaintext] = useState<string | null>(null);
+
   const [loginForm, setLoginForm] = useState({
     username: "",
     password: ""
@@ -96,10 +133,14 @@ export default function App() {
     setDashboard(response);
   };
 
-  const refreshAudit = async (page = auditFilters.page) => {
-    const response = await api.audit.list({
+  const refreshAudit = async (page = auditFilters.page, overrides?: Partial<AuditFilters>) => {
+    const nextFilters = {
       ...auditFilters,
+      ...overrides,
       page
+    };
+    const response = await api.audit.list({
+      ...nextFilters
     });
     setAudit(response);
   };
@@ -109,8 +150,23 @@ export default function App() {
     setSystemStatus(response);
   };
 
+  const refreshApiKeys = async () => {
+    const response = await api.security.listApiKeys(true);
+    setAuditApiKeys(response.items);
+    const activeItems = response.items.filter((item) => !item.deletedAt);
+    setApiKeys(activeItems);
+    setApiKeyDrafts(buildApiKeyDrafts(activeItems));
+  };
+
   const refreshAll = async () => {
-    await Promise.all([refreshProviders(), refreshModels(), refreshDashboard(), refreshAudit(1), refreshSystem()]);
+    await Promise.all([
+      refreshProviders(),
+      refreshModels(),
+      refreshDashboard(),
+      refreshAudit(1),
+      refreshSystem(),
+      refreshApiKeys()
+    ]);
   };
 
   useEffect(() => {
@@ -158,7 +214,11 @@ export default function App() {
     void refreshDashboard(dashboardRange).catch(handleError);
   }, [dashboardRange, user]);
 
-  const updateProviderField = (providerId: string, field: keyof ProviderItem, value: string | boolean | number) => {
+  const updateProviderField = (
+    providerId: string,
+    field: keyof ProviderItem,
+    value: string | boolean | number
+  ) => {
     setProviders((current) =>
       current.map((provider) =>
         provider.id === providerId
@@ -274,31 +334,179 @@ export default function App() {
             ["audit", "审计日志"],
             ["system", "系统与安全"]
           ].map(([value, label]) => (
-            <button key={value} type="button" className={section === value ? "nav-item active" : "nav-item"} onClick={() => setSection(value as Section)}>
+            <button
+              key={value}
+              type="button"
+              className={section === value ? "nav-item active" : "nav-item"}
+              onClick={() => setSection(value as Section)}
+            >
               {label}
             </button>
           ))}
         </nav>
-        <button type="button" className="ghost" onClick={() => { void api.auth.logout().then(() => { setUser(null); handleNotice("已退出登录"); }).catch(handleError); }}>退出登录</button>
+        <button
+          type="button"
+          className="ghost"
+          onClick={() => {
+            void api.auth
+              .logout()
+              .then(() => {
+                setUser(null);
+                handleNotice("已退出登录");
+              })
+              .catch(handleError);
+          }}
+        >
+          退出登录
+        </button>
       </aside>
 
       <section className="content">
         <header className="topbar">
           <div>
             <p className="eyebrow">运行态</p>
-            <h2>{section === "dashboard" ? "运行总览" : section === "providers" ? "Provider 管理" : section === "models" ? "模型别名与路由" : section === "audit" ? "审计检索" : "系统状态与安全"}</h2>
+            <h2>
+              {section === "dashboard"
+                ? "运行总览"
+                : section === "providers"
+                  ? "Provider 管理"
+                  : section === "models"
+                    ? "模型别名与路由"
+                    : section === "audit"
+                      ? "审计检索"
+                      : "系统状态与 API Key"}
+            </h2>
           </div>
-          <button type="button" className="secondary" onClick={() => { void refreshAll().then(() => handleNotice("数据已刷新")).catch(handleError); }}>立即刷新</button>
+          <button
+            type="button"
+            className="secondary"
+            onClick={() => {
+              void refreshAll()
+                .then(() => handleNotice("数据已刷新"))
+                .catch(handleError);
+            }}
+          >
+            立即刷新
+          </button>
         </header>
 
         {notice ? <p className="feedback success">{notice}</p> : null}
         {error ? <p className="feedback error">{error}</p> : null}
 
-        {section === "dashboard" ? <DashboardPage dashboard={dashboard} range={dashboardRange} setRange={setDashboardRange} /> : null}
-        {section === "providers" ? <ProvidersPage providers={providers} providerSecrets={providerSecrets} setProviderSecrets={setProviderSecrets} newProvider={newProvider} setNewProvider={setNewProvider} updateProviderField={updateProviderField} refreshProviders={refreshProviders} onNotice={handleNotice} onError={handleError} /> : null}
-        {section === "models" ? <ModelsPage models={models} providers={providers} newModel={newModel} setNewModel={setNewModel} bindingDrafts={bindingDrafts} setBindingDrafts={setBindingDrafts} updateModelField={updateModelField} updateBindingField={updateBindingField} moveBinding={moveBinding} refreshModels={refreshModels} onNotice={handleNotice} onError={handleError} setError={(message) => setError(message)} /> : null}
-        {section === "audit" ? <AuditPage providers={providers} modelAliasOptions={modelAliasOptions} audit={audit} auditFilters={auditFilters} setAuditFilters={setAuditFilters} refreshAudit={refreshAudit} onError={handleError} /> : null}
-        {section === "system" ? <SystemPage systemStatus={systemStatus} newGatewayKey={newGatewayKey} setNewGatewayKey={setNewGatewayKey} onRotateGatewayKey={() => { void api.security.rotateGatewayKey(newGatewayKey).then(async () => { setNewGatewayKey(""); await refreshSystem(); handleNotice("网关 API Key 已轮换"); }).catch(handleError); }} /> : null}
+        {section === "dashboard" ? (
+          <DashboardPage
+            dashboard={dashboard}
+            range={dashboardRange}
+            setRange={setDashboardRange}
+          />
+        ) : null}
+
+        {section === "providers" ? (
+          <ProvidersPage
+            providers={providers}
+            providerSecrets={providerSecrets}
+            setProviderSecrets={setProviderSecrets}
+            newProvider={newProvider}
+            setNewProvider={setNewProvider}
+            updateProviderField={updateProviderField}
+            refreshProviders={refreshProviders}
+            onNotice={handleNotice}
+            onError={handleError}
+          />
+        ) : null}
+
+        {section === "models" ? (
+          <ModelsPage
+            models={models}
+            providers={providers}
+            newModel={newModel}
+            setNewModel={setNewModel}
+            bindingDrafts={bindingDrafts}
+            setBindingDrafts={setBindingDrafts}
+            updateModelField={updateModelField}
+            updateBindingField={updateBindingField}
+            moveBinding={moveBinding}
+            refreshModels={refreshModels}
+            onNotice={handleNotice}
+            onError={handleError}
+            setError={(message) => setError(message)}
+          />
+        ) : null}
+
+        {section === "audit" ? (
+          <AuditPage
+            providers={providers}
+            apiKeys={auditApiKeys}
+            modelAliasOptions={modelAliasOptions}
+            audit={audit}
+            auditFilters={auditFilters}
+            setAuditFilters={setAuditFilters}
+            refreshAudit={refreshAudit}
+            onError={handleError}
+          />
+        ) : null}
+
+        {section === "system" ? (
+          <SystemPage
+            systemStatus={systemStatus}
+            apiKeys={apiKeys}
+            apiKeyDrafts={apiKeyDrafts}
+            setApiKeyDrafts={setApiKeyDrafts}
+            newApiKeyName={newApiKeyName}
+            setNewApiKeyName={setNewApiKeyName}
+            createdApiKeyPlaintext={createdApiKeyPlaintext}
+            onCreateApiKey={() => {
+              if (!newApiKeyName.trim()) {
+                setError("请先填写 API Key 名称");
+                return;
+              }
+
+              void api.security
+                .createApiKey(newApiKeyName.trim())
+                .then(async (response) => {
+                  setNewApiKeyName("");
+                  setCreatedApiKeyPlaintext(response.createdKeyPlaintext);
+                  await Promise.all([refreshApiKeys(), refreshSystem()]);
+                  handleNotice(`API Key ${response.item.name} 已创建`);
+                })
+                .catch(handleError);
+            }}
+            onSaveApiKey={(apiKeyId) => {
+              const draft = apiKeyDrafts[apiKeyId];
+              if (!draft) {
+                setError("没有可保存的 API Key 草稿");
+                return;
+              }
+
+              void api.security
+                .updateApiKey(apiKeyId, draft)
+                .then(async (response) => {
+                  await Promise.all([refreshApiKeys(), refreshSystem()]);
+                  handleNotice(`API Key ${response.item.name} 已更新`);
+                })
+                .catch(handleError);
+            }}
+            onDeleteApiKey={(apiKeyId) => {
+              const current = apiKeys.find((item) => item.id === apiKeyId);
+              if (!current) {
+                setError("API Key 不存在");
+                return;
+              }
+
+              if (!window.confirm(`确认删除 API Key「${current.name}」吗？删除后将立即失效。`)) {
+                return;
+              }
+
+              void api.security
+                .deleteApiKey(apiKeyId)
+                .then(async () => {
+                  await Promise.all([refreshApiKeys(), refreshSystem(), refreshAudit(1)]);
+                  handleNotice(`API Key ${current.name} 已删除`);
+                })
+                .catch(handleError);
+            }}
+          />
+        ) : null}
       </section>
     </main>
   );

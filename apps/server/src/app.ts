@@ -9,7 +9,6 @@ import { createSqliteConnection, migrateSqlite } from "../../../packages/db/src/
 import { resolveConfig } from "./config.ts";
 import { bootstrapIfNeeded, resetRuntimePrioritiesToDefault } from "./services/bootstrap.ts";
 import { MemoryRateLimiter } from "./security/rate-limit.ts";
-import { getSetting } from "./services/settings.ts";
 import { registerHealthRoutes } from "./routes/health.ts";
 import { registerAdminAuthRoutes } from "./routes/admin/auth.ts";
 import { registerAdminProviderRoutes } from "./routes/admin/providers.ts";
@@ -40,7 +39,6 @@ export async function buildApp(options?: {
       ready: false,
       readyErrors: [],
       appliedMigrations,
-      gatewayApiKeyHash: getSetting(database.sqlite, "gateway_api_key_hash"),
       activeProxyRequests: 0,
       loginLimiter: new MemoryRateLimiter(),
       apiLimiter: new MemoryRateLimiter()
@@ -57,6 +55,7 @@ export async function buildApp(options?: {
   app.decorate("appCtx", appCtx);
   app.addHook("onRequest", async (request, reply) => {
     request.adminUser = null;
+    request.gatewayApiKey = null;
     reply.header("x-request-id", request.id);
   });
 

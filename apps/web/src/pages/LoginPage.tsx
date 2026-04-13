@@ -21,13 +21,17 @@ export function LoginPage({ error, loginForm, setLoginForm, onSubmit }: LoginPag
       <section className="panel auth-panel">
         <p className="eyebrow">LLM Router Admin</p>
         <h1>Docker / NAS 公网版控制台</h1>
-        <p className="muted">使用管理员账号登录后，即可管理 Provider、模型路由、安全策略和审计数据。</p>
+        <p className="muted">
+          使用管理员账号登录后，即可管理 Provider、模型路由、安全策略和审计数据。
+        </p>
         <form className="stack" onSubmit={onSubmit}>
           <label>
             <span>用户名</span>
             <input
               value={loginForm.username}
-              onChange={(event) => setLoginForm((current) => ({ ...current, username: event.target.value }))}
+              onChange={(event) =>
+                setLoginForm((current) => ({ ...current, username: event.target.value }))
+              }
               placeholder="admin"
             />
           </label>
@@ -36,7 +40,9 @@ export function LoginPage({ error, loginForm, setLoginForm, onSubmit }: LoginPag
             <input
               type="password"
               value={loginForm.password}
-              onChange={(event) => setLoginForm((current) => ({ ...current, password: event.target.value }))}
+              onChange={(event) =>
+                setLoginForm((current) => ({ ...current, password: event.target.value }))
+              }
               placeholder="至少 8 位"
             />
           </label>

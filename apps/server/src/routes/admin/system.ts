@@ -8,11 +8,10 @@ export async function registerAdminSystemRoutes(app: FastifyInstance): Promise<v
     "/admin/api/system/status",
     { preHandler: [enforceAdminIpAllowlist, requireAdminSession] },
     async (request) =>
-      buildSystemStatus(request, request.server.appCtx.config, {
+      buildSystemStatus(request.server.appCtx.database.sqlite, request, request.server.appCtx.config, {
         ready: request.server.appCtx.state.ready,
         readyErrors: request.server.appCtx.state.readyErrors,
-        appliedMigrations: request.server.appCtx.state.appliedMigrations,
-        gatewayApiKeyHash: request.server.appCtx.state.gatewayApiKeyHash
+        appliedMigrations: request.server.appCtx.state.appliedMigrations
       })
   );
 }

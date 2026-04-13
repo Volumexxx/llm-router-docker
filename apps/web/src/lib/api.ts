@@ -28,7 +28,10 @@ async function request<T>(input: string, init?: RequestInit): Promise<T> {
 
   const contentType = response.headers.get("content-type") ?? "";
   const isJson = contentType.includes("application/json");
-  const payload = (isJson ? await response.json() : await response.text()) as T | ApiErrorShape | string;
+  const payload = (isJson ? await response.json() : await response.text()) as
+    | T
+    | ApiErrorShape
+    | string;
 
   if (!response.ok) {
     const errorPayload = payload as ApiErrorShape;
@@ -49,7 +52,10 @@ async function request<T>(input: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   auth: {
-    me: () => request<{ user: { id: string; username: string } }>("/admin/api/auth/me", { method: "GET" }),
+    me: () =>
+      request<{ user: { id: string; username: string } }>("/admin/api/auth/me", {
+        method: "GET"
+      }),
     login: (username: string, password: string) =>
       request<{ user: { id: string; username: string } }>("/admin/api/auth/login", {
         method: "POST",
@@ -101,7 +107,11 @@ export const api = {
         method: "POST",
         body: JSON.stringify(payload)
       }),
-    updateBinding: (modelId: string, bindingId: string, payload: Partial<BindingPayload> & { runtimePriority?: number; defaultPriority?: number }) =>
+    updateBinding: (
+      modelId: string,
+      bindingId: string,
+      payload: Partial<BindingPayload> & { runtimePriority?: number; defaultPriority?: number }
+    ) =>
       request<{ item: ModelItem }>(`/admin/api/models/${modelId}/bindings/${bindingId}`, {
         method: "PATCH",
         body: JSON.stringify(payload)
@@ -136,10 +146,26 @@ export const api = {
     }
   },
   security: {
-    rotateGatewayKey: (newGatewayApiKey: string) =>
-      request<{ success: boolean; rotatedAt: string }>("/admin/api/security/gateway-key", {
+    listApiKeys: (includeDeleted = false) =>
+      request<{ items: ApiKeyItem[] }>(
+        `/admin/api/security/api-keys?includeDeleted=${includeDeleted ? "true" : "false"}`,
+        {
+          method: "GET"
+        }
+      ),
+    createApiKey: (name: string) =>
+      request<{ item: ApiKeyItem; createdKeyPlaintext: string }>("/admin/api/security/api-keys", {
         method: "POST",
-        body: JSON.stringify({ newGatewayApiKey })
+        body: JSON.stringify({ name })
+      }),
+    updateApiKey: (apiKeyId: string, payload: Partial<Pick<ApiKeyItem, "name" | "enabled">>) =>
+      request<{ item: ApiKeyItem }>(`/admin/api/security/api-keys/${apiKeyId}`, {
+        method: "PATCH",
+        body: JSON.stringify(payload)
+      }),
+    deleteApiKey: (apiKeyId: string) =>
+      request<{ success: boolean }>(`/admin/api/security/api-keys/${apiKeyId}`, {
+        method: "DELETE"
       })
   },
   system: {
@@ -162,6 +188,17 @@ export interface ProviderItem {
   enabled: boolean;
   testTimeoutMs: number;
   apiKeyPreview: string | null;
+}
+
+export interface ApiKeyItem {
+  id: string;
+  name: string;
+  maskedPreview: string;
+  enabled: boolean;
+  deletedAt: string | null;
+  lastUsedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface BindingPayload {
@@ -235,6 +272,7 @@ export interface DashboardSummary {
   trend: TrendPoint[];
   providerCards: DashboardCard[];
   modelCards: DashboardCard[];
+  apiKeyCards: DashboardCard[];
 }
 
 export interface AuditItem {
@@ -244,6 +282,9 @@ export interface AuditItem {
   provider_name: string | null;
   model_alias: string | null;
   upstream_model: string | null;
+  api_key_id: string | null;
+  api_key_name: string | null;
+  api_key_masked_preview: string | null;
   status_category: string;
   http_status: number;
   latency_ms: number;
@@ -289,6 +330,7 @@ export interface SystemStatus {
   adminWhitelistEnabled: boolean;
   apiWhitelistEnabled: boolean;
   appliedMigrations: string[];
-  gatewayKeyConfigured: boolean;
+  activeApiKeyCount: number;
+  totalApiKeyCount: number;
   warnings: string[];
 }

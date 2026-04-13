@@ -2,19 +2,26 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 
 import { estimateCost } from "../../../../packages/shared/src/index.ts";
 import { sendJsonError } from "../lib/http.ts";
-import { clampText, getErrorSummary, parseJson } from "../lib/utils.ts";
+import { clampText, parseJson } from "../lib/utils.ts";
 import { requireGatewayBearerToken, rejectGatewayRequest } from "../security/auth.ts";
 import { getClientIp, isIpAllowed } from "../security/ip.ts";
-import { verifyCredential } from "../security/crypto.ts";
 import { listVisibleModels, resolveRoutableBinding } from "../services/models.ts";
-import {
-  proxyProviderJson,
-  streamProviderResponse
-} from "../services/provider-client.ts";
+import { proxyProviderJson, streamProviderResponse } from "../services/provider-client.ts";
+import { authenticateApiKey } from "../services/api-keys.ts";
 import { writeAuditLog, writeSecurityAuditFromRequest } from "../services/audit.ts";
 
 function classifyFailure(errorCode: string | null): "upstream_error" | "network_error" {
   return errorCode === "network_error" ? "network_error" : "upstream_error";
+}
+
+function buildApiKeyAuditContext(request: FastifyRequest) {
+  return request.gatewayApiKey
+    ? {
+        apiKeyId: request.gatewayApiKey.id,
+        apiKeyName: request.gatewayApiKey.name,
+        apiKeyMaskedPreview: request.gatewayApiKey.maskedPreview
+      }
+    : {};
 }
 
 async function authorizeGatewayRequest(
@@ -58,20 +65,35 @@ async function authorizeGatewayRequest(
 
   const bearerToken = requireGatewayBearerToken(request);
   if (!bearerToken) {
-    rejectGatewayRequest(request, reply, "gateway_auth_required", 401, "缺少网关 API Key");
+    rejectGatewayRequest(request, reply, "gateway_auth_required", 401, "缺少 API Key");
     return false;
   }
 
-  if (!appCtx.state.gatewayApiKeyHash) {
-    rejectGatewayRequest(request, reply, "gateway_key_missing", 503, "系统尚未配置网关 API Key");
+  const authResult = await authenticateApiKey(appCtx.database.sqlite, bearerToken);
+  if (authResult.kind === "no_active_keys") {
+    rejectGatewayRequest(
+      request,
+      reply,
+      "api_keys_not_configured",
+      503,
+      "系统尚未创建可用的 API Key，请先登录后台创建并启用 API Key",
+      {
+        statusCategory: "configuration_error"
+      }
+    );
     return false;
   }
 
-  const verified = await verifyCredential(appCtx.state.gatewayApiKeyHash, bearerToken);
-  if (!verified) {
-    rejectGatewayRequest(request, reply, "gateway_auth_invalid", 401, "网关 API Key 不正确");
+  if (authResult.kind !== "matched" || !authResult.apiKey) {
+    rejectGatewayRequest(request, reply, "gateway_auth_invalid", 401, "API Key 无效");
     return false;
   }
+
+  request.gatewayApiKey = {
+    id: authResult.apiKey.id,
+    name: authResult.apiKey.name,
+    maskedPreview: authResult.apiKey.maskedPreview
+  };
 
   return true;
 }
@@ -91,6 +113,20 @@ async function handleProxyEndpoint(
     const requestedModel = body?.model;
 
     if (!requestedModel) {
+      writeAuditLog(request.server.appCtx.database.sqlite, {
+        requestId: request.id,
+        endpointType,
+        isStream: Boolean(body?.stream),
+        statusCategory: "configuration_error",
+        httpStatus: 400,
+        latencyMs: Date.now() - started,
+        errorCode: "model_required",
+        errorSummary: "请求中缺少 model",
+        clientIp: getClientIp(request),
+        userAgent: request.headers["user-agent"]?.toString() ?? null,
+        ...buildApiKeyAuditContext(request)
+      });
+
       sendJsonError(reply, 400, "model_required", "请求中缺少 model");
       return;
     }
@@ -108,14 +144,18 @@ async function handleProxyEndpoint(
         errorCode: "model_not_routable",
         errorSummary: "模型别名未配置或当前没有可用路由",
         clientIp: getClientIp(request),
-        userAgent: request.headers["user-agent"]?.toString() ?? null
+        userAgent: request.headers["user-agent"]?.toString() ?? null,
+        ...buildApiKeyAuditContext(request)
       });
 
       sendJsonError(reply, 404, "model_not_routable", "模型别名未配置或当前没有可用路由");
       return;
     }
 
-    if (request.server.appCtx.state.activeProxyRequests >= request.server.appCtx.config.maxActiveProxyRequests) {
+    if (
+      request.server.appCtx.state.activeProxyRequests >=
+      request.server.appCtx.config.maxActiveProxyRequests
+    ) {
       writeAuditLog(request.server.appCtx.database.sqlite, {
         requestId: request.id,
         endpointType,
@@ -128,12 +168,13 @@ async function handleProxyEndpoint(
         httpStatus: 429,
         latencyMs: Date.now() - started,
         errorCode: "proxy_concurrency_limited",
-        errorSummary: "当前代理并发数已达上限",
+        errorSummary: "当前代理并发数已达到上限",
         clientIp: getClientIp(request),
-        userAgent: request.headers["user-agent"]?.toString() ?? null
+        userAgent: request.headers["user-agent"]?.toString() ?? null,
+        ...buildApiKeyAuditContext(request)
       });
 
-      sendJsonError(reply, 429, "proxy_concurrency_limited", "当前代理并发数已达上限");
+      sendJsonError(reply, 429, "proxy_concurrency_limited", "当前代理并发数已达到上限");
       return;
     }
 
@@ -169,7 +210,8 @@ async function handleProxyEndpoint(
               result.estimatedCost ??
               estimateCost(result.usage, binding.inputPrice, binding.outputPrice),
             clientIp: getClientIp(request),
-            userAgent: request.headers["user-agent"]?.toString() ?? null
+            userAgent: request.headers["user-agent"]?.toString() ?? null,
+            ...buildApiKeyAuditContext(request)
           });
         } catch (error) {
           const statusCode =
@@ -199,7 +241,8 @@ async function handleProxyEndpoint(
             errorCode,
             errorSummary: summary,
             clientIp: getClientIp(request),
-            userAgent: request.headers["user-agent"]?.toString() ?? null
+            userAgent: request.headers["user-agent"]?.toString() ?? null,
+            ...buildApiKeyAuditContext(request)
           });
         }
 
@@ -233,7 +276,8 @@ async function handleProxyEndpoint(
           errorCode: result.errorCode,
           errorSummary: result.errorSummary,
           clientIp: getClientIp(request),
-          userAgent: request.headers["user-agent"]?.toString() ?? null
+          userAgent: request.headers["user-agent"]?.toString() ?? null,
+          ...buildApiKeyAuditContext(request)
         });
         return;
       }
@@ -257,7 +301,8 @@ async function handleProxyEndpoint(
         totalTokens: result.usage.totalTokens,
         estimatedCost: result.estimatedCost,
         clientIp: getClientIp(request),
-        userAgent: request.headers["user-agent"]?.toString() ?? null
+        userAgent: request.headers["user-agent"]?.toString() ?? null,
+        ...buildApiKeyAuditContext(request)
       });
     } finally {
       request.server.appCtx.state.activeProxyRequests -= 1;
@@ -267,11 +312,23 @@ async function handleProxyEndpoint(
 
 export async function registerGatewayRoutes(app: FastifyInstance): Promise<void> {
   app.get("/v1/models", async (request, reply) => {
+    const started = Date.now();
     if (!(await authorizeGatewayRequest(request, reply))) {
       return;
     }
 
     const models = listVisibleModels(request.server.appCtx.database.sqlite);
+
+    writeAuditLog(request.server.appCtx.database.sqlite, {
+      requestId: request.id,
+      endpointType: "model_list",
+      statusCategory: "success",
+      httpStatus: 200,
+      latencyMs: Date.now() - started,
+      clientIp: getClientIp(request),
+      userAgent: request.headers["user-agent"]?.toString() ?? null,
+      ...buildApiKeyAuditContext(request)
+    });
 
     reply.send({
       object: "list",

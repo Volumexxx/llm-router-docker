@@ -4,7 +4,8 @@ import type { DashboardCard, DashboardSummary, TrendPoint } from "../../../../pa
 import {
   average,
   calculatePercentile,
-  dashboardRangeSchema
+  dashboardRangeSchema,
+  formatApiKeyLabel
 } from "../../../../packages/shared/src/index.ts";
 import { queryInferenceAuditRows } from "./audit.ts";
 
@@ -130,6 +131,13 @@ export function buildDashboardSummary(
   const overallBuckets = makeBuckets(range);
   const providerBuckets = new Map<string, BucketAccumulator[]>();
   const modelBuckets = new Map<string, BucketAccumulator[]>();
+  const apiKeyBuckets = new Map<
+    string,
+    {
+      label: string;
+      buckets: BucketAccumulator[];
+    }
+  >();
 
   const overallLatencies: number[] = [];
   let inputTokens = 0;
@@ -153,6 +161,14 @@ export function buildDashboardSummary(
     const cost = Number(row.estimated_cost ?? 0);
     const providerLabel = String(row.provider_name ?? "未知 Provider");
     const modelLabel = String(row.model_alias ?? "未知模型");
+    const apiKeyGroupKey =
+      row.api_key_id != null
+        ? String(row.api_key_id)
+        : `${String(row.api_key_name ?? "")}:${String(row.api_key_masked_preview ?? "")}`;
+    const apiKeyLabel = formatApiKeyLabel(
+      row.api_key_name != null ? String(row.api_key_name) : null,
+      row.api_key_masked_preview != null ? String(row.api_key_masked_preview) : null
+    );
 
     const bucket = overallBuckets[index];
     bucket.requests += 1;
@@ -181,6 +197,20 @@ export function buildDashboardSummary(
     modelBucket.estimatedCost += cost;
     modelBucket.latencies.push(latency);
     modelBuckets.set(modelLabel, modelBucketList);
+
+    const apiKeyBucketEntry = apiKeyBuckets.get(apiKeyGroupKey || apiKeyLabel) ?? {
+      label: apiKeyLabel,
+      buckets: makeBuckets(range)
+    };
+    const apiKeyBucket = apiKeyBucketEntry.buckets[index];
+    apiKeyBucket.requests += 1;
+    apiKeyBucket.successes += isSuccess ? 1 : 0;
+    apiKeyBucket.failures += isSuccess ? 0 : 1;
+    apiKeyBucket.totalTokens += tokens;
+    apiKeyBucket.estimatedCost += cost;
+    apiKeyBucket.latencies.push(latency);
+    apiKeyBucketEntry.label = apiKeyLabel;
+    apiKeyBuckets.set(apiKeyGroupKey || apiKeyLabel, apiKeyBucketEntry);
 
     successes += isSuccess ? 1 : 0;
     failures += isSuccess ? 0 : 1;
@@ -219,6 +249,9 @@ export function buildDashboardSummary(
       .sort((a, b) => b.requests - a.requests),
     modelCards: Array.from(modelBuckets.entries())
       .map(([label, buckets]) => createCard(label, label, buckets))
+      .sort((a, b) => b.requests - a.requests),
+    apiKeyCards: Array.from(apiKeyBuckets.entries())
+      .map(([key, value]) => createCard(key, value.label, value.buckets))
       .sort((a, b) => b.requests - a.requests)
   };
 }

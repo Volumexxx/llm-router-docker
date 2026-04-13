@@ -5,11 +5,16 @@ import type { createSqliteConnection } from "../../../packages/db/src/index.ts";
 import type { MemoryRateLimiter } from "./security/rate-limit.ts";
 import type { RuntimeConfig } from "./config.ts";
 
+export interface GatewayApiKeyContext {
+  id: string;
+  name: string;
+  maskedPreview: string;
+}
+
 export interface RuntimeState {
   ready: boolean;
   readyErrors: string[];
   appliedMigrations: string[];
-  gatewayApiKeyHash: string | null;
   activeProxyRequests: number;
   loginLimiter: MemoryRateLimiter;
   apiLimiter: MemoryRateLimiter;
@@ -34,6 +39,7 @@ declare module "fastify" {
 
   interface FastifyRequest {
     adminUser: AdminSessionUser | null;
+    gatewayApiKey: GatewayApiKeyContext | null;
   }
 }
 

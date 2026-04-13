@@ -18,9 +18,6 @@ export async function bootstrapIfNeeded(sqlite: DatabaseSync, config: RuntimeCon
   if (!config.bootstrapAdminPassword) {
     missing.push("BOOTSTRAP_ADMIN_PASSWORD");
   }
-  if (!config.bootstrapGatewayApiKey) {
-    missing.push("BOOTSTRAP_GATEWAY_API_KEY");
-  }
 
   if (missing.length > 0) {
     throw new Error(
@@ -30,7 +27,6 @@ export async function bootstrapIfNeeded(sqlite: DatabaseSync, config: RuntimeCon
 
   const timestamp = nowIso();
   const passwordHash = await hashCredential(config.bootstrapAdminPassword!);
-  const gatewayApiKeyHash = await hashCredential(config.bootstrapGatewayApiKey!);
 
   try {
     sqlite.exec("BEGIN");
@@ -43,7 +39,6 @@ export async function bootstrapIfNeeded(sqlite: DatabaseSync, config: RuntimeCon
       )
       .run(createId(), config.bootstrapAdminUsername, passwordHash, timestamp, timestamp);
 
-    setSetting(sqlite, "gateway_api_key_hash", gatewayApiKeyHash);
     setSetting(sqlite, "initialized_at", timestamp);
     sqlite.exec("COMMIT");
   } catch (error) {

@@ -18,7 +18,6 @@ export async function registerHealthRoutes(app: FastifyInstance): Promise<void> 
       checks: {
         database: true,
         migrationsApplied: state.appliedMigrations,
-        gatewayKeyConfigured: Boolean(state.gatewayApiKeyHash),
         encryptionKeyLoaded: Boolean(request.server.appCtx.config.configEncryptionKey),
         errors: state.readyErrors
       }
