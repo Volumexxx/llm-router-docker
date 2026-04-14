@@ -429,6 +429,114 @@ describe("llm router server", () => {
     }
   });
 
+  it("records token usage for responses endpoints", async () => {
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+
+      if (url.endsWith("/responses")) {
+        return new Response(
+          JSON.stringify({
+            id: "resp_test",
+            object: "response",
+            output: [
+              {
+                type: "message",
+                role: "assistant",
+                content: [{ type: "output_text", text: "hello from responses" }]
+              }
+            ],
+            response: {
+              usage: {
+                input_tokens: 14,
+                input_tokens_details: {
+                  cached_tokens: 3
+                },
+                output_tokens: 6,
+                total_tokens: 20
+              }
+            }
+          }),
+          {
+            status: 200,
+            headers: {
+              "content-type": "application/json"
+            }
+          }
+        );
+      }
+
+      return new Response(
+        JSON.stringify({
+          data: [{ id: "gpt-4o" }]
+        }),
+        {
+          status: 200,
+          headers: {
+            "content-type": "application/json"
+          }
+        }
+      );
+    });
+
+    const app = await createTestApp(fetchImpl);
+
+    try {
+      const cookie = await login(app);
+      await createProviderAndModel(app, cookie);
+      const apiKey = await createGatewayApiKey(app, cookie, {
+        name: "responses-client"
+      });
+
+      const response = await app.inject({
+        method: "POST",
+        url: "/v1/responses",
+        headers: {
+          authorization: `Bearer ${apiKey.plaintext}`
+        },
+        payload: {
+          model: "gpt-4o-mini",
+          input: "Say hello"
+        }
+      });
+
+      expect(response.statusCode).toBe(200);
+
+      const auditResponse = await app.inject({
+        method: "GET",
+        url: `/admin/api/audit?page=1&pageSize=20&apiKeyId=${apiKey.id}&endpointType=responses`,
+        headers: {
+          cookie
+        }
+      });
+
+      expect(auditResponse.statusCode).toBe(200);
+      const responsesAudit = auditResponse
+        .json()
+        .items.find((item: { endpoint_type: string }) => item.endpoint_type === "responses");
+      expect(responsesAudit).toBeTruthy();
+      expect(responsesAudit.input_tokens).toBe(11);
+      expect(responsesAudit.cached_input_tokens).toBe(3);
+      expect(responsesAudit.output_tokens).toBe(6);
+      expect(responsesAudit.total_tokens).toBe(20);
+
+      const dashboard = await app.inject({
+        method: "GET",
+        url: "/admin/api/dashboard?range=day",
+        headers: {
+          cookie
+        }
+      });
+
+      expect(dashboard.statusCode).toBe(200);
+      expect(dashboard.json().overall.inputTokens).toBe(11);
+      expect(dashboard.json().overall.cacheTokens).toBe(3);
+      expect(dashboard.json().overall.outputTokens).toBe(6);
+      expect(dashboard.json().overall.totalTokens).toBe(20);
+    } finally {
+      await app.close();
+    }
+  });
+
   it("invalidates disabled and deleted API keys while keeping other active keys available", async () => {
     const app = await createTestApp();
 
@@ -845,7 +953,7 @@ describe("llm router server", () => {
       const bindingIds = secondBinding.bindings.map((binding) => binding.id);
       const reversed = [...bindingIds].reverse();
 
-      await app.inject({
+      const applyResponse = await app.inject({
         method: "POST",
         url: `/admin/api/models/${model.id}/runtime-order/apply`,
         headers: { cookie },
@@ -853,12 +961,30 @@ describe("llm router server", () => {
           bindingIds: reversed
         }
       });
+      expect(applyResponse.statusCode).toBe(200);
 
-      await app.inject({
+      const saveDefaultResponse = await app.inject({
         method: "POST",
         url: `/admin/api/models/${model.id}/runtime-order/save-default`,
-        headers: { cookie }
+        headers: { cookie },
+        payload: {
+          bindingIds: reversed
+        }
       });
+      expect(saveDefaultResponse.statusCode).toBe(200);
+
+      const savedModel = saveDefaultResponse.json().item as {
+        bindings: Array<{
+          id: string;
+          runtimePriority: number;
+          defaultPriority: number;
+          providerName: string;
+        }>;
+      };
+
+      expect(savedModel.bindings.map((binding) => binding.id)).toEqual(reversed);
+      expect(savedModel.bindings.map((binding) => binding.runtimePriority)).toEqual([0, 1]);
+      expect(savedModel.bindings.map((binding) => binding.defaultPriority)).toEqual([0, 1]);
     } finally {
       await app.close();
     }
@@ -877,6 +1003,122 @@ describe("llm router server", () => {
       expect(firstModel.bindings[0].providerName).toBe("provider-b");
     } finally {
       await restarted.close();
+    }
+  });
+
+  it("validates save-default binding ids", async () => {
+    const app = await createTestApp();
+
+    try {
+      const cookie = await login(app);
+      const providerA = await createProvider(app, cookie, {
+        name: "default-order-provider-a",
+        baseUrl: "https://default-a.example/v1"
+      });
+      const providerB = await createProvider(app, cookie, {
+        name: "default-order-provider-b",
+        baseUrl: "https://default-b.example/v1"
+      });
+      const model = await createModel(app, cookie, {
+        alias: "default-order-test",
+        displayName: "Default Order Test"
+      });
+
+      await addBinding(app, cookie, model.id, {
+        providerId: providerA.id,
+        upstreamModel: "model-a"
+      });
+      const secondBinding = await addBinding(app, cookie, model.id, {
+        providerId: providerB.id,
+        upstreamModel: "model-b"
+      });
+
+      const bindingIds = secondBinding.bindings.map((binding) => binding.id);
+
+      const missingBodyResponse = await app.inject({
+        method: "POST",
+        url: `/admin/api/models/${model.id}/runtime-order/save-default`,
+        headers: { cookie }
+      });
+
+      expect(missingBodyResponse.statusCode).toBe(400);
+      expect(missingBodyResponse.json().error.code).toBe("validation_error");
+
+      const invalidBindingResponse = await app.inject({
+        method: "POST",
+        url: `/admin/api/models/${model.id}/runtime-order/save-default`,
+        headers: { cookie },
+        payload: {
+          bindingIds: [bindingIds[0]]
+        }
+      });
+
+      expect(invalidBindingResponse.statusCode).toBe(400);
+      expect(invalidBindingResponse.json().error.code).toBe("binding_order_invalid");
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("deletes model bindings from the admin API", async () => {
+    const app = await createTestApp();
+
+    try {
+      const cookie = await login(app);
+      const providerA = await createProvider(app, cookie, {
+        name: "binding-provider-a",
+        baseUrl: "https://binding-a.example/v1"
+      });
+      const providerB = await createProvider(app, cookie, {
+        name: "binding-provider-b",
+        baseUrl: "https://binding-b.example/v1"
+      });
+      const model = await createModel(app, cookie, {
+        alias: "binding-delete-test",
+        displayName: "Binding Delete Test"
+      });
+
+      await addBinding(app, cookie, model.id, {
+        providerId: providerA.id,
+        upstreamModel: "model-a"
+      });
+      const secondBinding = await addBinding(app, cookie, model.id, {
+        providerId: providerB.id,
+        upstreamModel: "model-b"
+      });
+
+      const bindingToDelete = secondBinding.bindings.find(
+        (binding) => binding.providerName === "binding-provider-b"
+      );
+      expect(bindingToDelete).toBeTruthy();
+
+      const deleteResponse = await app.inject({
+        method: "DELETE",
+        url: `/admin/api/models/${model.id}/bindings/${bindingToDelete?.id}`,
+        headers: {
+          cookie
+        }
+      });
+
+      expect(deleteResponse.statusCode).toBe(200);
+
+      const modelsResponse = await app.inject({
+        method: "GET",
+        url: "/admin/api/models",
+        headers: {
+          cookie
+        }
+      });
+
+      expect(modelsResponse.statusCode).toBe(200);
+      const reloadedModel = modelsResponse
+        .json()
+        .items.find((item: { id: string }) => item.id === model.id);
+      expect(reloadedModel).toBeTruthy();
+      expect(reloadedModel.bindings).toHaveLength(1);
+      expect(reloadedModel.bindings[0].providerName).toBe("binding-provider-a");
+    } finally {
+      await app.close();
     }
   });
 });

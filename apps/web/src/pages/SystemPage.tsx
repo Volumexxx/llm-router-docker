@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type Dispatch, type SetStateAction } from "react";
+﻿import { useEffect, useMemo, useState, type Dispatch, type SetStateAction } from "react";
 
 import { Drawer } from "../components/Drawer.tsx";
 import type { ApiKeyItem, ModelItem, ProviderItem, SystemStatus } from "../lib/api.ts";
@@ -7,7 +7,9 @@ import { formatDateTime, formatNumber } from "../lib/format.ts";
 type ApiKeyDraft = {
   name: string;
   enabled: boolean;
+  allProvidersAllowed: boolean;
   allowedProviderIds: string[];
+  allModelsAllowed: boolean;
   allowedModelAliasIds: string[];
 };
 
@@ -51,21 +53,29 @@ function ScopeEditor({
   emptyLabel,
   items,
   selectedIds,
-  onToggle
+  allSelected,
+  onToggle,
+  onAllowAll
 }: {
   title: string;
   emptyLabel: string;
   items: Array<{ id: string; label: string; hint?: string }>;
   selectedIds: string[];
+  allSelected: boolean;
   onToggle: (id: string) => void;
+  onAllowAll: () => void;
 }) {
   return (
     <div className="scope-card">
       <div className="panel-head">
         <h4>{title}</h4>
-        <span className="pill">
-          {selectedIds.length === 0 ? emptyLabel : `已选 ${selectedIds.length} 项`}
-        </span>
+        <span className="pill">{allSelected ? emptyLabel : `已选 ${selectedIds.length} 项`}</span>
+      </div>
+
+      <div className="scope-card-actions">
+        <button type="button" className={allSelected ? "chip active" : "chip"} onClick={onAllowAll}>
+          全部可用
+        </button>
       </div>
 
       {items.length === 0 ? (
@@ -153,10 +163,36 @@ export function SystemPage({
     ? (apiKeyDrafts[selectedApiKey.id] ?? {
         name: selectedApiKey.name,
         enabled: selectedApiKey.enabled,
+        allProvidersAllowed: selectedApiKey.allProvidersAllowed,
         allowedProviderIds: selectedApiKey.allowedProviderIds,
+        allModelsAllowed: selectedApiKey.allModelsAllowed,
         allowedModelAliasIds: selectedApiKey.allowedModelAliasIds
       })
     : null;
+
+  const effectiveProviderIds =
+    selectedDraft && selectedDraft.allProvidersAllowed
+      ? providerOptions.map((provider) => provider.id)
+      : (selectedDraft?.allowedProviderIds ?? []);
+
+  const effectiveModelIds =
+    selectedDraft && selectedDraft.allModelsAllowed
+      ? modelOptions.map((model) => model.id)
+      : (selectedDraft?.allowedModelAliasIds ?? []);
+
+  const updateSelectedDraft = (patch: Partial<ApiKeyDraft>) => {
+    if (!selectedApiKey || !selectedDraft) {
+      return;
+    }
+
+    setApiKeyDrafts((current) => ({
+      ...current,
+      [selectedApiKey.id]: {
+        ...selectedDraft,
+        ...patch
+      }
+    }));
+  };
 
   return (
     <div className="stack">
@@ -225,7 +261,7 @@ export function SystemPage({
           <div className="stack compact-stack">
             <h3>创建 API Key</h3>
             <p className="muted">
-              创建时仅需命名。Provider / Model 权限请在详情抽屉中按需配置。
+              新建后默认支持全部 Provider 与 Model，如需收紧范围，再到详情抽屉里勾选白名单。
             </p>
           </div>
         </div>
@@ -341,6 +377,7 @@ export function SystemPage({
 
       <Drawer
         open={Boolean(selectedApiKey)}
+        size="wide"
         title={selectedApiKey ? `API Key 配置 · ${selectedApiKey.name}` : ""}
         subtitle={
           selectedApiKey
@@ -409,13 +446,13 @@ export function SystemPage({
                 <div>
                   <span>Provider 范围</span>
                   <strong>
-                    {summarizeScope(selectedDraft.allowedProviderIds, providerOptions, "全部 Provider")}
+                    {summarizeScope(effectiveProviderIds, providerOptions, "全部 Provider")}
                   </strong>
                 </div>
                 <div>
                   <span>Model 范围</span>
                   <strong>
-                    {summarizeScope(selectedDraft.allowedModelAliasIds, modelOptions, "全部模型")}
+                    {summarizeScope(effectiveModelIds, modelOptions, "全部模型")}
                   </strong>
                 </div>
               </div>
@@ -436,15 +473,19 @@ export function SystemPage({
                   title="Allowed Providers"
                   emptyLabel="全部 Provider"
                   items={providerOptions}
-                  selectedIds={selectedDraft.allowedProviderIds}
+                  selectedIds={effectiveProviderIds}
+                  allSelected={selectedDraft.allProvidersAllowed}
                   onToggle={(providerId) =>
-                    setApiKeyDrafts((current) => ({
-                      ...current,
-                      [selectedApiKey.id]: {
-                        ...selectedDraft,
-                        allowedProviderIds: toggleId(selectedDraft.allowedProviderIds, providerId)
-                      }
-                    }))
+                    updateSelectedDraft({
+                      allProvidersAllowed: false,
+                      allowedProviderIds: toggleId(effectiveProviderIds, providerId)
+                    })
+                  }
+                  onAllowAll={() =>
+                    updateSelectedDraft({
+                      allProvidersAllowed: true,
+                      allowedProviderIds: []
+                    })
                   }
                 />
 
@@ -452,15 +493,19 @@ export function SystemPage({
                   title="Allowed Models"
                   emptyLabel="全部模型"
                   items={modelOptions}
-                  selectedIds={selectedDraft.allowedModelAliasIds}
+                  selectedIds={effectiveModelIds}
+                  allSelected={selectedDraft.allModelsAllowed}
                   onToggle={(modelId) =>
-                    setApiKeyDrafts((current) => ({
-                      ...current,
-                      [selectedApiKey.id]: {
-                        ...selectedDraft,
-                        allowedModelAliasIds: toggleId(selectedDraft.allowedModelAliasIds, modelId)
-                      }
-                    }))
+                    updateSelectedDraft({
+                      allModelsAllowed: false,
+                      allowedModelAliasIds: toggleId(effectiveModelIds, modelId)
+                    })
+                  }
+                  onAllowAll={() =>
+                    updateSelectedDraft({
+                      allModelsAllowed: true,
+                      allowedModelAliasIds: []
+                    })
                   }
                 />
               </div>

@@ -4,11 +4,19 @@ interface DrawerProps {
   open: boolean;
   title: string;
   subtitle?: string;
+  size?: "default" | "wide" | "xl";
   onClose: () => void;
   children: ReactNode;
 }
 
-export function Drawer({ open, title, subtitle, onClose, children }: DrawerProps) {
+export function Drawer({
+  open,
+  title,
+  subtitle,
+  size = "default",
+  onClose,
+  children
+}: DrawerProps) {
   useEffect(() => {
     if (!open) {
       return;
@@ -32,7 +40,7 @@ export function Drawer({ open, title, subtitle, onClose, children }: DrawerProps
     <div className="overlay-shell" role="presentation">
       <div className="overlay-backdrop" onClick={onClose} />
       <aside
-        className="drawer-panel"
+        className={`drawer-panel drawer-panel-${size}`}
         role="dialog"
         aria-modal="true"
         aria-labelledby="drawer-title"

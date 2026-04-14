@@ -46,6 +46,65 @@ function readNumber(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function looksLikeUsageRecord(value: unknown): value is Record<string, unknown> {
+  const record = asRecord(value);
+  if (!record) {
+    return false;
+  }
+
+  return [
+    "prompt_tokens",
+    "input_tokens",
+    "completion_tokens",
+    "output_tokens",
+    "total_tokens",
+    "prompt_tokens_details",
+    "input_tokens_details"
+  ].some((key) => key in record);
+}
+
+function findUsageRecord(payload: unknown): Record<string, unknown> | null {
+  const queue: unknown[] = [payload];
+  const visited = new Set<object>();
+
+  while (queue.length > 0) {
+    const current = queue.shift();
+    if (!current || typeof current !== "object") {
+      continue;
+    }
+
+    if (visited.has(current)) {
+      continue;
+    }
+    visited.add(current);
+
+    if (looksLikeUsageRecord(current)) {
+      return current;
+    }
+
+    if (Array.isArray(current)) {
+      queue.push(...current);
+      continue;
+    }
+
+    const record = current as Record<string, unknown>;
+    const nestedUsage = record.usage;
+    if (looksLikeUsageRecord(nestedUsage)) {
+      return nestedUsage;
+    }
+
+    queue.push(...Object.values(record));
+  }
+
+  return null;
+}
+
 function readCachedInputTokens(usage: Record<string, unknown>): number | null {
   const promptDetails = usage.prompt_tokens_details;
   if (promptDetails && typeof promptDetails === "object") {
@@ -67,9 +126,9 @@ function readCachedInputTokens(usage: Record<string, unknown>): number | null {
 }
 
 export function extractUsage(payload: unknown): TokenUsage {
-  const usage = (payload as { usage?: Record<string, unknown> } | null)?.usage;
+  const usage = findUsageRecord(payload);
 
-  if (!usage || typeof usage !== "object") {
+  if (!usage) {
     return {
       inputTokens: null,
       outputTokens: null,

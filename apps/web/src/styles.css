@@ -210,6 +210,36 @@ label span,
   background: var(--bg-hover);
 }
 
+button:disabled,
+.chip:disabled,
+.secondary:disabled,
+.ghost:disabled,
+.primary:disabled,
+.icon-button:disabled,
+.mini-action:disabled,
+.header-button:disabled,
+.table-value-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.46;
+  transform: none;
+  box-shadow: none;
+}
+
+button:disabled:hover,
+.chip:disabled:hover,
+.secondary:disabled:hover,
+.ghost:disabled:hover,
+.primary:disabled:hover,
+.icon-button:disabled:hover,
+.mini-action:disabled:hover,
+.header-button:disabled:hover,
+.table-value-button:disabled:hover {
+  transform: none;
+  border-color: var(--line);
+  background: rgba(12, 30, 52, 0.68);
+  box-shadow: none;
+}
+
 .nav-item {
   display: grid;
   gap: 4px;
@@ -373,6 +403,25 @@ textarea:focus {
   width: auto;
 }
 
+.binding-order-controls,
+.binding-actions,
+.scope-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.binding-order-controls,
+.binding-actions {
+  flex-wrap: nowrap;
+}
+
+.binding-order-controls .chip,
+.binding-actions .secondary,
+.binding-actions .ghost {
+  white-space: nowrap;
+}
+
 .cluster-between {
   justify-content: space-between;
 }
@@ -426,9 +475,17 @@ textarea:focus {
   overflow-x: auto;
 }
 
+.drawer-table-wrap {
+  padding-bottom: 4px;
+}
+
 table {
   width: 100%;
   border-collapse: collapse;
+}
+
+.binding-table {
+  min-width: 980px;
 }
 
 th,
@@ -531,6 +588,11 @@ tbody tr:hover {
   background: rgba(9, 22, 40, 0.82);
 }
 
+.scope-card-actions {
+  justify-content: flex-end;
+  margin-bottom: 12px;
+}
+
 .checkbox-list {
   display: grid;
   gap: 10px;
@@ -616,6 +678,18 @@ tbody tr:hover {
   height: calc(100vh - 36px);
 }
 
+.drawer-panel-default {
+  width: min(780px, calc(100vw - 36px));
+}
+
+.drawer-panel-wide {
+  width: min(980px, calc(100vw - 36px));
+}
+
+.drawer-panel-xl {
+  width: min(1180px, calc(100vw - 36px));
+}
+
 .overlay-header {
   display: flex;
   justify-content: space-between;
@@ -636,6 +710,44 @@ tbody tr:hover {
 .chart-shell {
   display: grid;
   gap: 16px;
+}
+
+.chart-detail-panel {
+  border: 1px solid rgba(98, 166, 255, 0.14);
+  border-radius: 22px;
+  padding: 16px;
+  background:
+    linear-gradient(180deg, rgba(10, 28, 48, 0.96), rgba(6, 18, 31, 0.94)),
+    radial-gradient(circle at top right, rgba(62, 203, 255, 0.12), transparent 24%);
+}
+
+.chart-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+}
+
+.chart-detail-card {
+  display: grid;
+  gap: 8px;
+  padding: 14px 16px;
+  border: 1px solid rgba(98, 166, 255, 0.12);
+  border-radius: 18px;
+  background: rgba(8, 20, 35, 0.72);
+}
+
+.chart-detail-card span {
+  color: var(--muted);
+}
+
+.chart-detail-card strong {
+  font-family: "Chakra Petch", sans-serif;
+  font-size: 1.12rem;
+}
+
+.chart-detail-card-accent {
+  border-color: rgba(62, 203, 255, 0.26);
+  background: rgba(12, 33, 56, 0.82);
 }
 
 .trend-chart {
@@ -659,6 +771,41 @@ tbody tr:hover {
 .trend-chart-axis {
   fill: rgba(170, 206, 247, 0.78);
   font-size: 12px;
+}
+
+.trend-chart-point-button {
+  cursor: pointer;
+}
+
+.trend-chart-point-hitbox {
+  fill: transparent;
+}
+
+.trend-chart-point-ring {
+  fill: rgba(62, 203, 255, 0.12);
+  stroke: rgba(62, 203, 255, 0.36);
+  stroke-width: 1.5;
+}
+
+.trend-chart-point {
+  stroke: rgba(4, 14, 27, 0.78);
+  stroke-width: 1.5;
+  transition:
+    r 0.18s ease,
+    stroke-width 0.18s ease,
+    filter 0.18s ease,
+    opacity 0.18s ease;
+}
+
+.trend-chart-point-button:hover .trend-chart-point,
+.trend-chart-point-button:focus-visible .trend-chart-point {
+  filter: drop-shadow(0 0 10px rgba(62, 203, 255, 0.4));
+}
+
+.trend-chart-point.is-selected {
+  stroke: rgba(255, 255, 255, 0.88);
+  stroke-width: 2.5;
+  filter: drop-shadow(0 0 12px rgba(62, 203, 255, 0.55));
 }
 
 .chart-legend {

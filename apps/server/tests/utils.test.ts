@@ -38,6 +38,28 @@ describe("extractUsage", () => {
     expect(usage.totalTokens).toBe(19);
   });
 
+  it("reads usage nested inside a responses payload", () => {
+    const usage = extractUsage({
+      type: "response.completed",
+      response: {
+        id: "resp_123",
+        usage: {
+          input_tokens: 18,
+          input_tokens_details: {
+            cached_tokens: 5
+          },
+          output_tokens: 9,
+          total_tokens: 27
+        }
+      }
+    });
+
+    expect(usage.inputTokens).toBe(18);
+    expect(usage.cachedInputTokens).toBe(5);
+    expect(usage.outputTokens).toBe(9);
+    expect(usage.totalTokens).toBe(27);
+  });
+
   it("returns null usage fields when payload has no usage object", () => {
     const usage = extractUsage({
       object: "chat.completion"

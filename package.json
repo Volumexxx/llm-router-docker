@@ -7,6 +7,8 @@
     "dev:server": "pnpm --filter @llm-router/server dev",
     "dev:web": "pnpm --filter @llm-router/web dev",
     "build": "pnpm -r build",
+    "docker:build": "docker build -t llm-router-docker:latest .",
+    "docker:export": "docker save -o llm-router-docker-latest.tar llm-router-docker:latest",
     "test": "pnpm -r test",
     "typecheck": "pnpm -r typecheck"
   },

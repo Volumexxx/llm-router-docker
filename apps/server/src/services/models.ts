@@ -330,6 +330,8 @@ export function applyRuntimeOrder(
   modelId: string,
   bindingIds: string[]
 ): ModelAliasView | null {
+  const timestamp = nowIso();
+
   try {
     sqlite.exec("BEGIN");
     bindingIds.forEach((bindingId, index) => {
@@ -341,7 +343,7 @@ export function applyRuntimeOrder(
             WHERE id = ? AND model_alias_id = ?
           `
         )
-        .run(index, nowIso(), bindingId, modelId);
+        .run(index, timestamp, bindingId, modelId);
     });
     sqlite.exec("COMMIT");
   } catch (error) {
@@ -352,17 +354,37 @@ export function applyRuntimeOrder(
   return getModelById(sqlite, modelId);
 }
 
-export function saveRuntimeOrderAsDefault(sqlite: DatabaseSync, modelId: string): ModelAliasView | null {
-  sqlite
-    .prepare(
-      `
-        UPDATE model_bindings
-        SET default_priority = runtime_priority,
-            updated_at = ?
-        WHERE model_alias_id = ?
-      `
-    )
-    .run(nowIso(), modelId);
+export function saveRuntimeOrderAsDefault(
+  sqlite: DatabaseSync,
+  modelId: string,
+  bindingIds: string[]
+): ModelAliasView | null {
+  if (!getModelById(sqlite, modelId)) {
+    return null;
+  }
+
+  const timestamp = nowIso();
+
+  try {
+    sqlite.exec("BEGIN");
+    bindingIds.forEach((bindingId, index) => {
+      sqlite
+        .prepare(
+          `
+            UPDATE model_bindings
+            SET runtime_priority = ?,
+                default_priority = ?,
+                updated_at = ?
+            WHERE id = ? AND model_alias_id = ?
+          `
+        )
+        .run(index, index, timestamp, bindingId, modelId);
+    });
+    sqlite.exec("COMMIT");
+  } catch (error) {
+    sqlite.exec("ROLLBACK");
+    throw error;
+  }
 
   return getModelById(sqlite, modelId);
 }

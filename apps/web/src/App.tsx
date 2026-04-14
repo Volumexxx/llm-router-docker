@@ -33,7 +33,9 @@ type AuditFilters = {
 type ApiKeyDraft = {
   name: string;
   enabled: boolean;
+  allProvidersAllowed: boolean;
   allowedProviderIds: string[];
+  allModelsAllowed: boolean;
   allowedModelAliasIds: string[];
 };
 
@@ -66,7 +68,9 @@ function buildApiKeyDrafts(items: ApiKeyItem[]): Record<string, ApiKeyDraft> {
       {
         name: item.name,
         enabled: item.enabled,
+        allProvidersAllowed: item.allProvidersAllowed,
         allowedProviderIds: item.allowedProviderIds,
+        allModelsAllowed: item.allModelsAllowed,
         allowedModelAliasIds: item.allowedModelAliasIds
       }
     ])
@@ -340,6 +344,43 @@ export default function App() {
     );
   };
 
+  const replaceBindingOrder = (modelId: string, bindingIds: string[]) => {
+    setModels((current) =>
+      current.map((model) => {
+        if (model.id !== modelId) {
+          return model;
+        }
+
+        const bindingById = new Map(model.bindings.map((binding) => [binding.id, binding]));
+        const reorderedBindings = bindingIds
+          .map((bindingId) => bindingById.get(bindingId))
+          .filter((binding): binding is BindingItem => Boolean(binding));
+
+        if (reorderedBindings.length !== model.bindings.length) {
+          return model;
+        }
+
+        return {
+          ...model,
+          bindings: reorderedBindings
+        };
+      })
+    );
+  };
+
+  const removeBindingFromState = (modelId: string, bindingId: string) => {
+    setModels((current) =>
+      current.map((model) =>
+        model.id === modelId
+          ? {
+              ...model,
+              bindings: model.bindings.filter((binding) => binding.id !== bindingId)
+            }
+          : model
+      )
+    );
+  };
+
   if (loading) {
     return <main className="shell loading-state">正在加载管理台…</main>;
   }
@@ -465,6 +506,8 @@ export default function App() {
             updateModelField={updateModelField}
             updateBindingField={updateBindingField}
             moveBinding={moveBinding}
+            replaceBindingOrder={replaceBindingOrder}
+            removeBindingFromState={removeBindingFromState}
             refreshModels={refreshModels}
             onNotice={handleNotice}
             onError={handleError}
@@ -522,7 +565,12 @@ export default function App() {
               }
 
               void api.security
-                .updateApiKey(apiKeyId, draft)
+                .updateApiKey(apiKeyId, {
+                  name: draft.name,
+                  enabled: draft.enabled,
+                  allowedProviderIds: draft.allProvidersAllowed ? [] : draft.allowedProviderIds,
+                  allowedModelAliasIds: draft.allModelsAllowed ? [] : draft.allowedModelAliasIds
+                })
                 .then(async (response) => {
                   await Promise.all([refreshApiKeys(), refreshSystem()]);
                   handleNotice(`API Key ${response.item.name} 已更新。`);

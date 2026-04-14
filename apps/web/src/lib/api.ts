@@ -17,13 +17,16 @@ export class ApiError extends Error {
 }
 
 async function request<T>(input: string, init?: RequestInit): Promise<T> {
+  const headers = new Headers(init?.headers);
+
+  if (init?.body && !headers.has("content-type")) {
+    headers.set("content-type", "application/json");
+  }
+
   const response = await fetch(input, {
     credentials: "include",
-    headers: {
-      "content-type": "application/json",
-      ...(init?.headers ?? {})
-    },
-    ...init
+    ...init,
+    headers
   });
 
   const contentType = response.headers.get("content-type") ?? "";
@@ -308,9 +311,10 @@ export const api = {
         method: "POST",
         body: JSON.stringify({ bindingIds })
       }),
-    saveDefaultOrder: (modelId: string) =>
+    saveDefaultOrder: (modelId: string, bindingIds: string[]) =>
       request<{ item: ModelItem }>(`/admin/api/models/${modelId}/runtime-order/save-default`, {
-        method: "POST"
+        method: "POST",
+        body: JSON.stringify({ bindingIds })
       })
   },
   dashboard: {

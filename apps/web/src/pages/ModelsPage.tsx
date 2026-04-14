@@ -34,6 +34,8 @@ interface ModelsPageProps {
     value: string | boolean | number
   ) => void;
   moveBinding: (modelId: string, index: number, direction: -1 | 1) => void;
+  replaceBindingOrder: (modelId: string, bindingIds: string[]) => void;
+  removeBindingFromState: (modelId: string, bindingId: string) => void;
   refreshModels: () => Promise<void>;
   onNotice: (message: string) => void;
   onError: (reason: unknown) => void;
@@ -54,6 +56,25 @@ const emptyBinding: BindingPayload = {
   enabled: true
 };
 
+function areOrdersEqual(left: string[], right: string[]): boolean {
+  return left.length === right.length && left.every((id, index) => id === right[index]);
+}
+
+function getBindingOrderByPriority(
+  bindings: BindingItem[],
+  priorityKey: "runtimePriority" | "defaultPriority"
+): string[] {
+  return [...bindings]
+    .sort((left, right) => {
+      if (left[priorityKey] !== right[priorityKey]) {
+        return left[priorityKey] - right[priorityKey];
+      }
+
+      return left.id.localeCompare(right.id);
+    })
+    .map((binding) => binding.id);
+}
+
 export function ModelsPage({
   models,
   providers,
@@ -64,6 +85,8 @@ export function ModelsPage({
   updateModelField,
   updateBindingField,
   moveBinding,
+  replaceBindingOrder,
+  removeBindingFromState,
   refreshModels,
   onNotice,
   onError,
@@ -104,6 +127,15 @@ export function ModelsPage({
   };
 
   const selectedDraft = selectedModel ? bindingDrafts[selectedModel.id] : null;
+  const currentOrder = selectedModel?.bindings.map((binding) => binding.id) ?? [];
+  const runtimeOrder = selectedModel
+    ? getBindingOrderByPriority(selectedModel.bindings, "runtimePriority")
+    : [];
+  const defaultOrder = selectedModel
+    ? getBindingOrderByPriority(selectedModel.bindings, "defaultPriority")
+    : [];
+  const isCurrentOrderDirtyFromRuntime = !areOrdersEqual(currentOrder, runtimeOrder);
+  const isCurrentOrderDirtyFromDefault = !areOrdersEqual(currentOrder, defaultOrder);
 
   return (
     <div className="stack">
@@ -231,6 +263,7 @@ export function ModelsPage({
 
       <Drawer
         open={Boolean(selectedModel)}
+        size="xl"
         title={selectedModel ? `模型配置 · ${selectedModel.alias}` : ""}
         subtitle={
           selectedModel
@@ -332,8 +365,8 @@ export function ModelsPage({
                 </div>
               </div>
 
-              <div className="table-wrap">
-                <table>
+              <div className="table-wrap drawer-table-wrap">
+                <table className="binding-table">
                   <thead>
                     <tr>
                       <th>顺序</th>
@@ -356,7 +389,7 @@ export function ModelsPage({
                       selectedModel.bindings.map((binding, index) => (
                         <tr key={binding.id}>
                           <td>
-                            <div className="action-row compact-row">
+                            <div className="binding-order-controls">
                               <span className="table-rank">{index + 1}</span>
                               <button
                                 type="button"
@@ -433,7 +466,7 @@ export function ModelsPage({
                             />
                           </td>
                           <td>
-                            <div className="action-row">
+                            <div className="binding-actions">
                               <button
                                 type="button"
                                 className="secondary"
@@ -464,8 +497,9 @@ export function ModelsPage({
 
                                   void api.models
                                     .removeBinding(selectedModel.id, binding.id)
-                                    .then(async () => {
-                                      await refreshModels();
+                                    .then(() => {
+                                      removeBindingFromState(selectedModel.id, binding.id);
+                                      void refreshModels().catch(onError);
                                       onNotice(`绑定 ${binding.providerName} 已移除。`);
                                     })
                                     .catch(onError);
@@ -486,12 +520,10 @@ export function ModelsPage({
                 <button
                   type="button"
                   className="secondary"
+                  disabled={!isCurrentOrderDirtyFromRuntime}
                   onClick={() => {
                     void api.models
-                      .applyRuntimeOrder(
-                        selectedModel.id,
-                        selectedModel.bindings.map((binding) => binding.id)
-                      )
+                      .applyRuntimeOrder(selectedModel.id, currentOrder)
                       .then(async () => {
                         await refreshModels();
                         onNotice(`模型 ${selectedModel.alias} 的运行顺序已应用。`);
@@ -504,9 +536,20 @@ export function ModelsPage({
                 <button
                   type="button"
                   className="ghost"
+                  disabled={!isCurrentOrderDirtyFromDefault}
+                  onClick={() => {
+                    replaceBindingOrder(selectedModel.id, defaultOrder);
+                  }}
+                >
+                  恢复默认
+                </button>
+                <button
+                  type="button"
+                  className="ghost"
+                  disabled={!isCurrentOrderDirtyFromDefault}
                   onClick={() => {
                     void api.models
-                      .saveDefaultOrder(selectedModel.id)
+                      .saveDefaultOrder(selectedModel.id, currentOrder)
                       .then(async () => {
                         await refreshModels();
                         onNotice(`模型 ${selectedModel.alias} 的默认顺序已保存。`);
@@ -514,7 +557,7 @@ export function ModelsPage({
                       .catch(onError);
                   }}
                 >
-                  另存为默认顺序
+                  保存默认
                 </button>
               </div>
             </section>

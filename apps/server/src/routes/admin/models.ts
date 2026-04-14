@@ -23,6 +23,19 @@ import {
 } from "../../services/models.ts";
 import { isSqliteUniqueConstraintError } from "../../services/providers.ts";
 
+function hasExactModelBindings(
+  model: NonNullable<ReturnType<typeof getModelById>>,
+  bindingIds: string[]
+): boolean {
+  const modelBindingIds = model.bindings.map((binding) => binding.id).sort();
+  const requestedIds = [...bindingIds].sort();
+
+  return (
+    modelBindingIds.length === requestedIds.length &&
+    modelBindingIds.every((id, index) => id === requestedIds[index])
+  );
+}
+
 export async function registerAdminModelRoutes(app: FastifyInstance): Promise<void> {
   const protectedHandlers = [enforceAdminIpAllowlist, requireAdminSession];
 
@@ -172,10 +185,7 @@ export async function registerAdminModelRoutes(app: FastifyInstance): Promise<vo
           return;
         }
 
-        const modelBindingIds = model.bindings.map((binding) => binding.id).sort();
-        const requestedIds = [...input.bindingIds].sort();
-
-        if (modelBindingIds.length !== requestedIds.length || modelBindingIds.some((id, index) => id !== requestedIds[index])) {
+        if (!hasExactModelBindings(model, input.bindingIds)) {
           sendJsonError(reply, 400, "binding_order_invalid", "运行时顺序必须包含该模型的全部绑定");
           return;
         }
@@ -196,15 +206,40 @@ export async function registerAdminModelRoutes(app: FastifyInstance): Promise<vo
     "/admin/api/models/:modelId/runtime-order/save-default",
     { preHandler: protectedHandlers },
     async (request, reply) => {
-      const modelId = (request.params as { modelId: string }).modelId;
-      const item = saveRuntimeOrderAsDefault(request.server.appCtx.database.sqlite, modelId);
+      try {
+        const modelId = (request.params as { modelId: string }).modelId;
+        const input = runtimeOrderSchema.parse(request.body);
+        const model = getModelById(request.server.appCtx.database.sqlite, modelId);
 
-      if (!item) {
-        sendJsonError(reply, 404, "model_not_found", "模型不存在");
-        return;
+        if (!model) {
+          sendJsonError(reply, 404, "model_not_found", "Model alias does not exist");
+          return;
+        }
+
+        if (!hasExactModelBindings(model, input.bindingIds)) {
+          sendJsonError(
+            reply,
+            400,
+            "binding_order_invalid",
+            "Default order must include every binding for the selected model"
+          );
+          return;
+        }
+
+        const item = saveRuntimeOrderAsDefault(
+          request.server.appCtx.database.sqlite,
+          modelId,
+          input.bindingIds
+        );
+
+        reply.send({ item });
+      } catch (error) {
+        if (sendValidationError(reply, error)) {
+          return;
+        }
+
+        throw error;
       }
-
-      reply.send({ item });
     }
   );
 }
