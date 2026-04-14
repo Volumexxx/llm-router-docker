@@ -145,5 +145,35 @@ export const migrations: SqlMigration[] = [
       CREATE INDEX IF NOT EXISTS idx_audit_logs_api_key_id
       ON audit_logs(api_key_id);
     `
+  },
+  {
+    version: "003_api_key_scopes_and_cache_tokens",
+    sql: `
+      CREATE TABLE IF NOT EXISTS api_key_provider_scopes (
+        api_key_id TEXT NOT NULL,
+        provider_id TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        UNIQUE(api_key_id, provider_id),
+        FOREIGN KEY(api_key_id) REFERENCES api_keys(id) ON DELETE CASCADE,
+        FOREIGN KEY(provider_id) REFERENCES providers(id) ON DELETE CASCADE
+      );
+
+      CREATE TABLE IF NOT EXISTS api_key_model_scopes (
+        api_key_id TEXT NOT NULL,
+        model_alias_id TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        UNIQUE(api_key_id, model_alias_id),
+        FOREIGN KEY(api_key_id) REFERENCES api_keys(id) ON DELETE CASCADE,
+        FOREIGN KEY(model_alias_id) REFERENCES model_aliases(id) ON DELETE CASCADE
+      );
+
+      ALTER TABLE audit_logs ADD COLUMN cached_input_tokens INTEGER;
+
+      CREATE INDEX IF NOT EXISTS idx_api_key_provider_scopes_provider_id
+      ON api_key_provider_scopes(provider_id);
+
+      CREATE INDEX IF NOT EXISTS idx_api_key_model_scopes_model_alias_id
+      ON api_key_model_scopes(model_alias_id);
+    `
   }
 ];

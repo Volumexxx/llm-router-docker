@@ -1,6 +1,6 @@
+import { DashboardCardView } from "../components/DashboardCardView.tsx";
 import type { DashboardSummary } from "../lib/api.ts";
 import { formatCost, formatDateTime, formatNumber } from "../lib/format.ts";
-import { DashboardCardView } from "../components/DashboardCardView.tsx";
 import { Sparkline } from "../components/Sparkline.tsx";
 
 interface DashboardPageProps {
@@ -24,50 +24,67 @@ export function DashboardPage({ dashboard, range, setRange }: DashboardPageProps
             className={range === value ? "chip active" : "chip"}
             onClick={() => setRange(value)}
           >
-            {value === "day" ? "按日" : value === "week" ? "按周" : "按月"}
+            {value === "day" ? "Day" : value === "week" ? "Week" : "Month"}
           </button>
         ))}
       </div>
 
       <section className="metric-grid">
         <article className="panel">
-          <span>请求总数</span>
+          <span>Total Requests</span>
           <strong>{formatNumber(dashboard.overall.requests)}</strong>
         </article>
         <article className="panel">
-          <span>成功 / 失败</span>
+          <span>Success / Failure</span>
           <strong>
             {formatNumber(dashboard.overall.successes)} / {formatNumber(dashboard.overall.failures)}
           </strong>
         </article>
         <article className="panel">
-          <span>总成本</span>
+          <span>Uncached Input</span>
+          <strong>{formatNumber(dashboard.overall.inputTokens)}</strong>
+        </article>
+        <article className="panel">
+          <span>Output</span>
+          <strong>{formatNumber(dashboard.overall.outputTokens)}</strong>
+        </article>
+        <article className="panel">
+          <span>Cache</span>
+          <strong>{formatNumber(dashboard.overall.cacheTokens)}</strong>
+        </article>
+        <article className="panel">
+          <span>Total Tokens</span>
+          <strong>{formatNumber(dashboard.overall.totalTokens)}</strong>
+        </article>
+        <article className="panel">
+          <span>Estimated Cost</span>
           <strong>{formatCost(dashboard.overall.estimatedCost)}</strong>
         </article>
         <article className="panel">
-          <span>P95 延迟</span>
+          <span>P95 Latency</span>
           <strong>{formatNumber(dashboard.overall.p95LatencyMs)} ms</strong>
         </article>
       </section>
 
       <article className="panel">
         <div className="panel-head">
-          <h3>总体趋势</h3>
+          <h3>Overall Trend</h3>
           <span className="muted">
             {formatDateTime(dashboard.windowStart)} - {formatDateTime(dashboard.windowEnd)}
           </span>
         </div>
         <Sparkline points={dashboard.trend} />
         <div className="legend">
-          <span>平均延迟 {formatNumber(dashboard.overall.averageLatencyMs)} ms</span>
+          <span>Average latency {formatNumber(dashboard.overall.averageLatencyMs)} ms</span>
           <span>P50 {formatNumber(dashboard.overall.p50LatencyMs)} ms</span>
-          <span>缺失 usage {formatNumber(dashboard.overall.missingUsageCount)}</span>
+          <span>Missing usage {formatNumber(dashboard.overall.missingUsageCount)}</span>
+          <span>Error rate {formatNumber(dashboard.overall.errorRate * 100)}%</span>
         </div>
       </article>
 
       <section className="stack">
         <div className="panel-head">
-          <h3>Provider 排行</h3>
+          <h3>Provider Ranking</h3>
         </div>
         <div className="card-grid">
           {dashboard.providerCards.slice(0, 6).map((card) => (
@@ -78,7 +95,7 @@ export function DashboardPage({ dashboard, range, setRange }: DashboardPageProps
 
       <section className="stack">
         <div className="panel-head">
-          <h3>模型排行</h3>
+          <h3>Model Ranking</h3>
         </div>
         <div className="card-grid">
           {dashboard.modelCards.slice(0, 6).map((card) => (
@@ -89,7 +106,7 @@ export function DashboardPage({ dashboard, range, setRange }: DashboardPageProps
 
       <section className="stack">
         <div className="panel-head">
-          <h3>API Key 排行</h3>
+          <h3>API Key Ranking</h3>
         </div>
         <div className="card-grid">
           {dashboard.apiKeyCards.slice(0, 6).map((card) => (

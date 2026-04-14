@@ -42,17 +42,25 @@ interface AuditPageProps {
 
 function formatApiKeyLabel(apiKey: ApiKeyItem): string {
   const base = `${apiKey.name} (${apiKey.maskedPreview})`;
-  return apiKey.deletedAt ? `${base} [已删除]` : base;
+  return apiKey.deletedAt ? `${base} [deleted]` : base;
 }
 
-function formatAuditApiKey(
-  item: AuditResponse["items"][number]
-): string {
+function formatAuditApiKey(item: AuditResponse["items"][number]): string {
   if (item.api_key_name && item.api_key_masked_preview) {
     return `${item.api_key_name} (${item.api_key_masked_preview})`;
   }
 
   return item.api_key_name ?? item.api_key_masked_preview ?? "-";
+}
+
+function formatTokenBreakdown(item: AuditResponse["items"][number]): string {
+  return [
+    `In ${formatNumber(item.input_tokens)}`,
+    `Out ${formatNumber(item.output_tokens)}`,
+    `Cache ${formatNumber(item.cached_input_tokens)}`,
+    `Total ${formatNumber(item.total_tokens)}`,
+    `Cost ${formatCost(item.estimated_cost)}`
+  ].join(" / ");
 }
 
 export function AuditPage({
@@ -69,7 +77,7 @@ export function AuditPage({
     <div className="stack">
       <section className="panel">
         <div className="panel-head">
-          <h3>检索条件</h3>
+          <h3>Filters</h3>
           <button
             type="button"
             className="secondary"
@@ -86,9 +94,10 @@ export function AuditPage({
               void refreshAudit(1, nextFilters).catch(onError);
             }}
           >
-            清空
+            Clear
           </button>
         </div>
+
         <div className="form-grid">
           <label>
             <span>Provider</span>
@@ -98,7 +107,7 @@ export function AuditPage({
                 setAuditFilters((current) => ({ ...current, providerId: event.target.value }))
               }
             >
-              <option value="">全部</option>
+              <option value="">All</option>
               {providers.map((provider) => (
                 <option key={provider.id} value={provider.id}>
                   {provider.name}
@@ -106,6 +115,7 @@ export function AuditPage({
               ))}
             </select>
           </label>
+
           <label>
             <span>API Key</span>
             <select
@@ -114,7 +124,7 @@ export function AuditPage({
                 setAuditFilters((current) => ({ ...current, apiKeyId: event.target.value }))
               }
             >
-              <option value="">全部</option>
+              <option value="">All</option>
               {apiKeys.map((apiKey) => (
                 <option key={apiKey.id} value={apiKey.id}>
                   {formatApiKeyLabel(apiKey)}
@@ -122,8 +132,9 @@ export function AuditPage({
               ))}
             </select>
           </label>
+
           <label>
-            <span>模型别名</span>
+            <span>Model Alias</span>
             <input
               value={auditFilters.modelAlias}
               list="model-aliases"
@@ -137,40 +148,43 @@ export function AuditPage({
               ))}
             </datalist>
           </label>
+
           <label>
-            <span>状态</span>
+            <span>Status</span>
             <select
               value={auditFilters.statusCategory}
               onChange={(event) =>
                 setAuditFilters((current) => ({ ...current, statusCategory: event.target.value }))
               }
             >
-              <option value="">全部</option>
-              <option value="success">成功</option>
-              <option value="unauthorized">未授权</option>
-              <option value="configuration_error">配置错误</option>
-              <option value="upstream_error">上游错误</option>
-              <option value="network_error">网络错误</option>
-              <option value="security_policy">安全策略</option>
+              <option value="">All</option>
+              <option value="success">Success</option>
+              <option value="unauthorized">Unauthorized</option>
+              <option value="configuration_error">Configuration Error</option>
+              <option value="upstream_error">Upstream Error</option>
+              <option value="network_error">Network Error</option>
+              <option value="security_policy">Security Policy</option>
             </select>
           </label>
+
           <label>
-            <span>接口</span>
+            <span>Endpoint</span>
             <select
               value={auditFilters.endpointType}
               onChange={(event) =>
                 setAuditFilters((current) => ({ ...current, endpointType: event.target.value }))
               }
             >
-              <option value="">全部</option>
-              <option value="model_list">模型列表</option>
-              <option value="chat_completions">聊天补全</option>
+              <option value="">All</option>
+              <option value="model_list">Model List</option>
+              <option value="chat_completions">Chat Completions</option>
               <option value="responses">Responses</option>
-              <option value="admin_login">后台登录</option>
-              <option value="security">安全事件</option>
+              <option value="admin_login">Admin Login</option>
+              <option value="security">Security</option>
             </select>
           </label>
         </div>
+
         <button
           type="button"
           className="primary"
@@ -179,30 +193,31 @@ export function AuditPage({
             void refreshAudit(1, { page: 1 }).catch(onError);
           }}
         >
-          查询日志
+          Search
         </button>
       </section>
 
       <section className="panel">
         <div className="panel-head">
-          <h3>审计结果</h3>
-          <span className="pill">{audit?.pagination.total ?? 0} 条</span>
+          <h3>Audit Results</h3>
+          <span className="pill">{audit?.pagination.total ?? 0} rows</span>
         </div>
+
         <div className="table-wrap">
           <table>
             <thead>
               <tr>
-                <th>时间</th>
-                <th>接口</th>
+                <th>Time</th>
+                <th>Endpoint</th>
                 <th>Provider</th>
-                <th>模型</th>
+                <th>Model</th>
                 <th>API Key</th>
-                <th>状态</th>
+                <th>Status</th>
                 <th>HTTP</th>
-                <th>延迟</th>
-                <th>Tokens / 成本</th>
-                <th>来源 IP</th>
-                <th>摘要</th>
+                <th>Latency</th>
+                <th>Tokens / Cost</th>
+                <th>Client IP</th>
+                <th>Summary</th>
               </tr>
             </thead>
             <tbody>
@@ -216,9 +231,7 @@ export function AuditPage({
                   <td>{item.status_category}</td>
                   <td>{item.http_status}</td>
                   <td>{formatNumber(item.latency_ms)} ms</td>
-                  <td>
-                    {formatNumber(item.total_tokens)} / {formatCost(item.estimated_cost)}
-                  </td>
+                  <td>{formatTokenBreakdown(item)}</td>
                   <td>{item.client_ip ?? "-"}</td>
                   <td>{item.error_summary ?? "-"}</td>
                 </tr>
@@ -238,11 +251,13 @@ export function AuditPage({
               void refreshAudit(nextPage, { page: nextPage }).catch(onError);
             }}
           >
-            上一页
+            Previous
           </button>
+
           <span>
-            第 {audit?.pagination.page ?? 1} / {audit?.pagination.totalPages ?? 1} 页
+            Page {audit?.pagination.page ?? 1} / {audit?.pagination.totalPages ?? 1}
           </span>
+
           <button
             type="button"
             className="secondary"
@@ -253,7 +268,7 @@ export function AuditPage({
               void refreshAudit(nextPage, { page: nextPage }).catch(onError);
             }}
           >
-            下一页
+            Next
           </button>
         </div>
       </section>

@@ -190,7 +190,8 @@ button {
 .form-grid,
 .metric-grid,
 .card-grid,
-.detail-grid {
+.detail-grid,
+.scope-grid {
   display: grid;
   gap: 14px;
 }
@@ -211,11 +212,23 @@ button {
   grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
 }
 
+.scope-grid {
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+}
+
 label,
 .metric-grid article,
 .detail-grid div {
   display: grid;
   gap: 6px;
+}
+
+.inline-toggle {
+  align-content: end;
+}
+
+.inline-toggle input {
+  width: auto;
 }
 
 label span,
@@ -357,6 +370,45 @@ th {
   display: grid;
   gap: 8px;
   margin-top: 12px;
+}
+
+.scope-box {
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  padding: 14px;
+  background: rgba(255, 255, 255, 0.55);
+}
+
+.checkbox-list {
+  display: grid;
+  gap: 10px;
+  max-height: 280px;
+  overflow: auto;
+}
+
+.checkbox-item {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: start;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.checkbox-item input {
+  width: auto;
+  margin-top: 2px;
+}
+
+.checkbox-item span {
+  display: grid;
+  gap: 4px;
+}
+
+.checkbox-item small {
+  line-height: 1.35;
 }
 
 @media (max-width: 960px) {

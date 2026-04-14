@@ -1,4 +1,4 @@
-import { index, integer, primaryKey, real, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
+import { index, integer, real, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
 export const providers = sqliteTable(
   "providers",
@@ -103,6 +103,38 @@ export const apiKeys = sqliteTable(
   })
 );
 
+export const apiKeyProviderScopes = sqliteTable(
+  "api_key_provider_scopes",
+  {
+    apiKeyId: text("api_key_id").notNull(),
+    providerId: text("provider_id").notNull(),
+    createdAt: text("created_at").notNull()
+  },
+  (table) => ({
+    primary: uniqueIndex("api_key_provider_scopes_api_key_provider_unique").on(
+      table.apiKeyId,
+      table.providerId
+    ),
+    providerIndex: index("api_key_provider_scopes_provider_index").on(table.providerId)
+  })
+);
+
+export const apiKeyModelScopes = sqliteTable(
+  "api_key_model_scopes",
+  {
+    apiKeyId: text("api_key_id").notNull(),
+    modelAliasId: text("model_alias_id").notNull(),
+    createdAt: text("created_at").notNull()
+  },
+  (table) => ({
+    primary: uniqueIndex("api_key_model_scopes_api_key_model_unique").on(
+      table.apiKeyId,
+      table.modelAliasId
+    ),
+    modelIndex: index("api_key_model_scopes_model_index").on(table.modelAliasId)
+  })
+);
+
 export const systemSettings = sqliteTable("system_settings", {
   key: text("key").primaryKey(),
   value: text("value").notNull(),
@@ -128,6 +160,7 @@ export const auditLogs = sqliteTable(
     httpStatus: integer("http_status").notNull(),
     latencyMs: integer("latency_ms").notNull(),
     inputTokens: integer("input_tokens"),
+    cachedInputTokens: integer("cached_input_tokens"),
     outputTokens: integer("output_tokens"),
     totalTokens: integer("total_tokens"),
     estimatedCost: real("estimated_cost"),

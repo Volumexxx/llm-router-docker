@@ -25,7 +25,7 @@ export function clampText(value: string | null | undefined, maxLength = 300): st
     return normalized;
   }
 
-  return `${normalized.slice(0, maxLength - 1)}…`;
+  return `${normalized.slice(0, Math.max(0, maxLength - 3))}...`;
 }
 
 export function parseJson<T>(value: string): T | null {
@@ -42,6 +42,30 @@ export function joinUrl(baseUrl: string, pathname: string): string {
   return `${base}/${suffix}`;
 }
 
+function readNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function readCachedInputTokens(usage: Record<string, unknown>): number | null {
+  const promptDetails = usage.prompt_tokens_details;
+  if (promptDetails && typeof promptDetails === "object") {
+    const cachedTokens = readNumber((promptDetails as Record<string, unknown>).cached_tokens);
+    if (cachedTokens != null) {
+      return cachedTokens;
+    }
+  }
+
+  const inputDetails = usage.input_tokens_details;
+  if (inputDetails && typeof inputDetails === "object") {
+    const cachedTokens = readNumber((inputDetails as Record<string, unknown>).cached_tokens);
+    if (cachedTokens != null) {
+      return cachedTokens;
+    }
+  }
+
+  return null;
+}
+
 export function extractUsage(payload: unknown): TokenUsage {
   const usage = (payload as { usage?: Record<string, unknown> } | null)?.usage;
 
@@ -49,40 +73,35 @@ export function extractUsage(payload: unknown): TokenUsage {
     return {
       inputTokens: null,
       outputTokens: null,
+      cachedInputTokens: null,
       totalTokens: null
     };
   }
 
-  const promptTokens =
-    typeof usage.prompt_tokens === "number"
-      ? usage.prompt_tokens
-      : typeof usage.input_tokens === "number"
-        ? usage.input_tokens
-        : null;
-
-  const completionTokens =
-    typeof usage.completion_tokens === "number"
-      ? usage.completion_tokens
-      : typeof usage.output_tokens === "number"
-        ? usage.output_tokens
-        : null;
-
+  const inputTokens = readNumber(usage.prompt_tokens) ?? readNumber(usage.input_tokens);
+  const outputTokens = readNumber(usage.completion_tokens) ?? readNumber(usage.output_tokens);
+  const cachedInputTokens = readCachedInputTokens(usage);
   const totalTokens =
-    typeof usage.total_tokens === "number"
-      ? usage.total_tokens
-      : promptTokens != null || completionTokens != null
-        ? (promptTokens ?? 0) + (completionTokens ?? 0)
-        : null;
+    readNumber(usage.total_tokens) ??
+    (inputTokens != null || outputTokens != null
+      ? (inputTokens ?? 0) + (outputTokens ?? 0)
+      : null);
 
   return {
-    inputTokens: promptTokens,
-    outputTokens: completionTokens,
+    inputTokens,
+    outputTokens,
+    cachedInputTokens,
     totalTokens
   };
 }
 
-export function getErrorSummary(bodyText: string, fallback: string): { code: string | null; summary: string } {
-  const parsed = parseJson<{ error?: { code?: string; message?: string }; message?: string }>(bodyText);
+export function getErrorSummary(
+  bodyText: string,
+  fallback: string
+): { code: string | null; summary: string } {
+  const parsed = parseJson<{ error?: { code?: string; message?: string }; message?: string }>(
+    bodyText
+  );
 
   if (parsed?.error?.message) {
     return {

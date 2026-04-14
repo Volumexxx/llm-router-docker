@@ -1,33 +1,102 @@
 import type { Dispatch, SetStateAction } from "react";
 
-import type { ApiKeyItem, SystemStatus } from "../lib/api.ts";
+import type { ApiKeyItem, ModelItem, ProviderItem, SystemStatus } from "../lib/api.ts";
 import { formatDateTime, formatNumber } from "../lib/format.ts";
 
-interface ApiKeyDraft {
+type ApiKeyDraft = {
   name: string;
   enabled: boolean;
-}
+  allowedProviderIds: string[];
+  allowedModelAliasIds: string[];
+};
 
 interface SystemPageProps {
   systemStatus: SystemStatus | null;
+  providers: ProviderItem[];
+  models: ModelItem[];
   apiKeys: ApiKeyItem[];
   apiKeyDrafts: Record<string, ApiKeyDraft>;
   setApiKeyDrafts: Dispatch<SetStateAction<Record<string, ApiKeyDraft>>>;
-  newApiKeyName: string;
-  setNewApiKeyName: Dispatch<SetStateAction<string>>;
+  newApiKeyDraft: ApiKeyDraft;
+  setNewApiKeyDraft: Dispatch<SetStateAction<ApiKeyDraft>>;
   createdApiKeyPlaintext: string | null;
   onCreateApiKey: () => void;
   onSaveApiKey: (apiKeyId: string) => void;
   onDeleteApiKey: (apiKeyId: string) => void;
 }
 
+function toggleId(list: string[], value: string): string[] {
+  return list.includes(value) ? list.filter((item) => item !== value) : [...list, value];
+}
+
+function summarizeScope(
+  ids: string[],
+  items: Array<{ id: string; label: string }>,
+  emptyLabel: string
+): string {
+  if (ids.length === 0) {
+    return emptyLabel;
+  }
+
+  const labels = ids
+    .map((id) => items.find((item) => item.id === id)?.label)
+    .filter((label): label is string => Boolean(label));
+
+  return labels.length > 0 ? labels.join(", ") : emptyLabel;
+}
+
+function ScopeEditor({
+  title,
+  emptyLabel,
+  items,
+  selectedIds,
+  onToggle
+}: {
+  title: string;
+  emptyLabel: string;
+  items: Array<{ id: string; label: string; hint?: string }>;
+  selectedIds: string[];
+  onToggle: (id: string) => void;
+}) {
+  return (
+    <div className="scope-box">
+      <div className="panel-head">
+        <h4>{title}</h4>
+        <span className="pill">{selectedIds.length === 0 ? emptyLabel : `${selectedIds.length} selected`}</span>
+      </div>
+      {items.length === 0 ? (
+        <p className="muted">No selectable items yet.</p>
+      ) : (
+        <div className="checkbox-list">
+          {items.map((item) => (
+            <label key={item.id} className="checkbox-item">
+              <input
+                type="checkbox"
+                checked={selectedIds.includes(item.id)}
+                onChange={() => onToggle(item.id)}
+              />
+              <span>
+                <strong>{item.label}</strong>
+                {item.hint ? <small className="muted">{item.hint}</small> : null}
+              </span>
+            </label>
+          ))}
+        </div>
+      )}
+      <p className="muted">Leave everything unchecked to allow all.</p>
+    </div>
+  );
+}
+
 export function SystemPage({
   systemStatus,
+  providers,
+  models,
   apiKeys,
   apiKeyDrafts,
   setApiKeyDrafts,
-  newApiKeyName,
-  setNewApiKeyName,
+  newApiKeyDraft,
+  setNewApiKeyDraft,
   createdApiKeyPlaintext,
   onCreateApiKey,
   onSaveApiKey,
@@ -37,48 +106,59 @@ export function SystemPage({
     return null;
   }
 
+  const providerOptions = providers.map((provider) => ({
+    id: provider.id,
+    label: provider.name,
+    hint: provider.baseUrl
+  }));
+  const modelOptions = models.map((model) => ({
+    id: model.id,
+    label: model.alias,
+    hint: model.displayName
+  }));
+
   return (
     <div className="stack">
       <section className="metric-grid">
         <article className="panel">
-          <span>服务就绪</span>
+          <span>Service</span>
           <strong>{systemStatus.ready ? "Ready" : "Not Ready"}</strong>
         </article>
         <article className="panel">
-          <span>可信代理</span>
-          <strong>{systemStatus.trustProxy ? "已启用" : "未启用"}</strong>
+          <span>Trusted Proxy</span>
+          <strong>{systemStatus.trustProxy ? "Enabled" : "Disabled"}</strong>
         </article>
         <article className="panel">
-          <span>可用 API Key</span>
+          <span>Active API Keys</span>
           <strong>
             {formatNumber(systemStatus.activeApiKeyCount)} / {formatNumber(systemStatus.totalApiKeyCount)}
           </strong>
         </article>
         <article className="panel">
-          <span>并发上限</span>
+          <span>Max Active Proxies</span>
           <strong>{systemStatus.maxActiveProxyRequests}</strong>
         </article>
       </section>
 
       <section className="panel">
         <div className="panel-head">
-          <h3>系统状态</h3>
+          <h3>System Status</h3>
         </div>
         <div className="detail-grid">
           <div>
-            <span>推荐 API 地址</span>
+            <span>Recommended API Base</span>
             <strong>{systemStatus.recommendedApiBaseUrl}</strong>
           </div>
           <div>
-            <span>推荐后台地址</span>
+            <span>Recommended Admin URL</span>
             <strong>{systemStatus.recommendedAdminUrl}</strong>
           </div>
           <div>
-            <span>数据目录</span>
+            <span>Data Directory</span>
             <strong>{systemStatus.dataDir}</strong>
           </div>
           <div>
-            <span>数据库文件</span>
+            <span>Database</span>
             <strong>{systemStatus.dbPath}</strong>
           </div>
         </div>
@@ -95,23 +175,63 @@ export function SystemPage({
 
       <section className="panel">
         <div className="panel-head">
-          <h3>创建 API Key</h3>
-          <span className="muted">系统会自动生成明文，只会在创建成功时展示一次。</span>
+          <h3>Create API Key</h3>
+          <span className="muted">The plaintext is shown only once after creation.</span>
         </div>
-        <label>
-          <span>名称</span>
-          <input
-            value={newApiKeyName}
-            onChange={(event) => setNewApiKeyName(event.target.value)}
-            placeholder="例如：NAS-Home / iPhone / OpenWebUI"
+
+        <div className="form-grid">
+          <label>
+            <span>Name</span>
+            <input
+              value={newApiKeyDraft.name}
+              onChange={(event) =>
+                setNewApiKeyDraft((current) => ({ ...current, name: event.target.value }))
+              }
+              placeholder="For example: NAS Home / iPhone / OpenWebUI"
+            />
+          </label>
+        </div>
+
+        <div className="scope-grid">
+          <ScopeEditor
+            title="Allowed Providers"
+            emptyLabel="All providers"
+            items={providerOptions}
+            selectedIds={newApiKeyDraft.allowedProviderIds}
+            onToggle={(providerId) =>
+              setNewApiKeyDraft((current) => ({
+                ...current,
+                allowedProviderIds: toggleId(current.allowedProviderIds, providerId)
+              }))
+            }
           />
-        </label>
+
+          <ScopeEditor
+            title="Allowed Models"
+            emptyLabel="All models"
+            items={modelOptions}
+            selectedIds={newApiKeyDraft.allowedModelAliasIds}
+            onToggle={(modelId) =>
+              setNewApiKeyDraft((current) => ({
+                ...current,
+                allowedModelAliasIds: toggleId(current.allowedModelAliasIds, modelId)
+              }))
+            }
+          />
+        </div>
+
+        <p className="feedback warning">
+          Routing rule: bindings are filtered by this key's Provider/Model scopes first, then the
+          router picks the remaining binding with the smallest runtime priority.
+        </p>
+
         <button type="button" className="primary" onClick={onCreateApiKey}>
-          创建 API Key
+          Create API Key
         </button>
+
         {createdApiKeyPlaintext ? (
           <div className="feedback warning">
-            <strong>请立即保存这把新 Key：</strong>
+            <strong>Save this key now.</strong>
             <div>
               <code>{createdApiKeyPlaintext}</code>
             </div>
@@ -119,91 +239,153 @@ export function SystemPage({
         ) : null}
       </section>
 
-      <section className="panel">
+      <section className="stack">
         <div className="panel-head">
-          <h3>API Key 管理</h3>
-          <span className="muted">支持名称编辑、启用/停用与软删除，历史审计会保留快照。</span>
+          <h3>API Key Management</h3>
+          <span className="muted">
+            Edit name, enable state, Provider scope and Model scope. Leaving scopes empty means
+            unrestricted access on that dimension.
+          </span>
         </div>
-        {apiKeys.length === 0 ? (
-          <p className="muted">当前还没有可管理的 API Key，先创建第一把即可开始调用 `/v1/*`。</p>
-        ) : (
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>名称</th>
-                  <th>掩码预览</th>
-                  <th>启用</th>
-                  <th>最近使用</th>
-                  <th>创建时间</th>
-                  <th>操作</th>
-                </tr>
-              </thead>
-              <tbody>
-                {apiKeys.map((apiKey) => {
-                  const draft = apiKeyDrafts[apiKey.id] ?? {
-                    name: apiKey.name,
-                    enabled: apiKey.enabled
-                  };
 
-                  return (
-                    <tr key={apiKey.id}>
-                      <td>
-                        <input
-                          value={draft.name}
-                          onChange={(event) =>
-                            setApiKeyDrafts((current) => ({
-                              ...current,
-                              [apiKey.id]: {
-                                ...draft,
-                                name: event.target.value
-                              }
-                            }))
+        {apiKeys.length === 0 ? (
+          <section className="panel">
+            <p className="muted">
+              No API key exists yet. Create the first key above before calling `/v1/*`.
+            </p>
+          </section>
+        ) : (
+          apiKeys.map((apiKey) => {
+            const draft = apiKeyDrafts[apiKey.id] ?? {
+              name: apiKey.name,
+              enabled: apiKey.enabled,
+              allowedProviderIds: apiKey.allowedProviderIds,
+              allowedModelAliasIds: apiKey.allowedModelAliasIds
+            };
+
+            return (
+              <section key={apiKey.id} className="panel">
+                <div className="panel-head">
+                  <div>
+                    <h3>{apiKey.name}</h3>
+                    <p className="muted">
+                      {apiKey.maskedPreview} · created {formatDateTime(apiKey.createdAt)}
+                    </p>
+                  </div>
+                  <span className="pill">{apiKey.enabled ? "Enabled" : "Disabled"}</span>
+                </div>
+
+                <div className="form-grid">
+                  <label>
+                    <span>Name</span>
+                    <input
+                      value={draft.name}
+                      onChange={(event) =>
+                        setApiKeyDrafts((current) => ({
+                          ...current,
+                          [apiKey.id]: {
+                            ...draft,
+                            name: event.target.value
                           }
-                        />
-                      </td>
-                      <td>{apiKey.maskedPreview}</td>
-                      <td>
-                        <input
-                          type="checkbox"
-                          checked={draft.enabled}
-                          onChange={(event) =>
-                            setApiKeyDrafts((current) => ({
-                              ...current,
-                              [apiKey.id]: {
-                                ...draft,
-                                enabled: event.target.checked
-                              }
-                            }))
+                        }))
+                      }
+                    />
+                  </label>
+
+                  <label className="inline-toggle">
+                    <span>Enabled</span>
+                    <input
+                      type="checkbox"
+                      checked={draft.enabled}
+                      onChange={(event) =>
+                        setApiKeyDrafts((current) => ({
+                          ...current,
+                          [apiKey.id]: {
+                            ...draft,
+                            enabled: event.target.checked
                           }
-                        />
-                      </td>
-                      <td>{apiKey.lastUsedAt ? formatDateTime(apiKey.lastUsedAt) : "-"}</td>
-                      <td>{formatDateTime(apiKey.createdAt)}</td>
-                      <td>
-                        <div className="toolbar">
-                          <button
-                            type="button"
-                            className="secondary"
-                            onClick={() => onSaveApiKey(apiKey.id)}
-                          >
-                            保存
-                          </button>
-                          <button
-                            type="button"
-                            className="secondary"
-                            onClick={() => onDeleteApiKey(apiKey.id)}
-                          >
-                            删除
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
+                        }))
+                      }
+                    />
+                  </label>
+                </div>
+
+                <div className="detail-grid">
+                  <div>
+                    <span>Last Used</span>
+                    <strong>{apiKey.lastUsedAt ? formatDateTime(apiKey.lastUsedAt) : "-"}</strong>
+                  </div>
+                  <div>
+                    <span>Provider Scope</span>
+                    <strong>
+                      {summarizeScope(
+                        draft.allowedProviderIds,
+                        providerOptions,
+                        "All providers"
+                      )}
+                    </strong>
+                  </div>
+                  <div>
+                    <span>Model Scope</span>
+                    <strong>
+                      {summarizeScope(draft.allowedModelAliasIds, modelOptions, "All models")}
+                    </strong>
+                  </div>
+                </div>
+
+                <div className="scope-grid">
+                  <ScopeEditor
+                    title="Allowed Providers"
+                    emptyLabel="All providers"
+                    items={providerOptions}
+                    selectedIds={draft.allowedProviderIds}
+                    onToggle={(providerId) =>
+                      setApiKeyDrafts((current) => ({
+                        ...current,
+                        [apiKey.id]: {
+                          ...draft,
+                          allowedProviderIds: toggleId(draft.allowedProviderIds, providerId)
+                        }
+                      }))
+                    }
+                  />
+
+                  <ScopeEditor
+                    title="Allowed Models"
+                    emptyLabel="All models"
+                    items={modelOptions}
+                    selectedIds={draft.allowedModelAliasIds}
+                    onToggle={(modelId) =>
+                      setApiKeyDrafts((current) => ({
+                        ...current,
+                        [apiKey.id]: {
+                          ...draft,
+                          allowedModelAliasIds: toggleId(draft.allowedModelAliasIds, modelId)
+                        }
+                      }))
+                    }
+                  />
+                </div>
+
+                <div className="toolbar">
+                  <button
+                    type="button"
+                    className="secondary"
+                    onClick={() => onSaveApiKey(apiKey.id)}
+                  >
+                    Save
+                  </button>
+                  <button
+                    type="button"
+                    className="secondary danger"
+                    onClick={() => onDeleteApiKey(apiKey.id)}
+                  >
+                    Delete
+                  </button>
+                </div>
+              </section>
+            );
+          })
         )}
       </section>
     </div>

@@ -86,13 +86,21 @@ export const runtimeOrderSchema = z.object({
   bindingIds: z.array(z.string().uuid()).min(1)
 });
 
+const uuidArraySchema = z
+  .array(z.string().uuid())
+  .transform((items) => Array.from(new Set(items)));
+
 export const apiKeyCreateSchema = z.object({
-  name: z.string().min(1).max(120)
+  name: z.string().min(1).max(120),
+  allowedProviderIds: uuidArraySchema.default([]),
+  allowedModelAliasIds: uuidArraySchema.default([])
 });
 
 export const apiKeyUpdateSchema = z.object({
   name: z.string().min(1).max(120).optional(),
-  enabled: z.boolean().optional()
+  enabled: z.boolean().optional(),
+  allowedProviderIds: uuidArraySchema.optional(),
+  allowedModelAliasIds: uuidArraySchema.optional()
 });
 
 export const apiKeyListQuerySchema = z.object({
@@ -126,6 +134,7 @@ export const auditQuerySchema = z.object({
 export interface TokenUsage {
   inputTokens: number | null;
   outputTokens: number | null;
+  cachedInputTokens: number | null;
   totalTokens: number | null;
 }
 
@@ -134,6 +143,9 @@ export interface TrendPoint {
   requests: number;
   successes: number;
   failures: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheTokens: number;
   totalTokens: number;
   estimatedCost: number;
   averageLatencyMs: number;
@@ -146,6 +158,9 @@ export interface DashboardCard {
   requests: number;
   successes: number;
   failures: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheTokens: number;
   totalTokens: number;
   estimatedCost: number;
   averageLatencyMs: number;
@@ -164,6 +179,7 @@ export interface DashboardSummary {
     errorRate: number;
     inputTokens: number;
     outputTokens: number;
+    cacheTokens: number;
     totalTokens: number;
     estimatedCost: number;
     averageLatencyMs: number;
@@ -239,4 +255,15 @@ export function average(values: number[]): number {
 
 export function normalizeUrl(value: string): string {
   return value.replace(/\/+$/, "");
+}
+
+export function normalizeDisplayInputTokens(
+  inputTokens: number | null | undefined,
+  cachedInputTokens: number | null | undefined
+): number | null {
+  if (inputTokens == null) {
+    return null;
+  }
+
+  return Math.max(inputTokens - (cachedInputTokens ?? 0), 0);
 }

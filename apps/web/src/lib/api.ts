@@ -43,11 +43,194 @@ async function request<T>(input: string, init?: RequestInit): Promise<T> {
     throw new ApiError(
       response.status,
       errorPayload.error?.code ?? "request_failed",
-      errorPayload.error?.message ?? "请求失败"
+      errorPayload.error?.message ?? "Request failed"
     );
   }
 
   return payload as T;
+}
+
+export interface ProviderPayload {
+  name: string;
+  baseUrl: string;
+  apiKey: string;
+  enabled: boolean;
+  testTimeoutMs: number;
+}
+
+export interface ProviderItem {
+  id: string;
+  name: string;
+  baseUrl: string;
+  enabled: boolean;
+  testTimeoutMs: number;
+  apiKeyPreview: string | null;
+}
+
+export interface ApiKeyMutationPayload {
+  name: string;
+  enabled?: boolean;
+  allowedProviderIds?: string[];
+  allowedModelAliasIds?: string[];
+}
+
+export interface ApiKeyItem {
+  id: string;
+  name: string;
+  maskedPreview: string;
+  enabled: boolean;
+  deletedAt: string | null;
+  lastUsedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+  allowedProviderIds: string[];
+  allowedModelAliasIds: string[];
+  allProvidersAllowed: boolean;
+  allModelsAllowed: boolean;
+}
+
+export interface BindingPayload {
+  providerId: string;
+  upstreamModel: string;
+  inputPrice: number;
+  outputPrice: number;
+  enabled: boolean;
+}
+
+export interface BindingItem extends BindingPayload {
+  id: string;
+  providerName: string;
+  runtimePriority: number;
+  defaultPriority: number;
+}
+
+export interface ModelPayload {
+  alias: string;
+  displayName: string;
+  enabled: boolean;
+}
+
+export interface ModelItem extends ModelPayload {
+  id: string;
+  bindings: BindingItem[];
+}
+
+export interface TrendPoint {
+  label: string;
+  requests: number;
+  successes: number;
+  failures: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheTokens: number;
+  totalTokens: number;
+  estimatedCost: number;
+  averageLatencyMs: number;
+  p95LatencyMs: number;
+}
+
+export interface DashboardCard {
+  key: string;
+  label: string;
+  requests: number;
+  successes: number;
+  failures: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheTokens: number;
+  totalTokens: number;
+  estimatedCost: number;
+  averageLatencyMs: number;
+  p95LatencyMs: number;
+  trend: TrendPoint[];
+}
+
+export interface DashboardSummary {
+  range: "day" | "week" | "month";
+  windowStart: string;
+  windowEnd: string;
+  overall: {
+    requests: number;
+    successes: number;
+    failures: number;
+    errorRate: number;
+    inputTokens: number;
+    outputTokens: number;
+    cacheTokens: number;
+    totalTokens: number;
+    estimatedCost: number;
+    averageLatencyMs: number;
+    p50LatencyMs: number;
+    p95LatencyMs: number;
+    missingUsageCount: number;
+  };
+  trend: TrendPoint[];
+  providerCards: DashboardCard[];
+  modelCards: DashboardCard[];
+  apiKeyCards: DashboardCard[];
+}
+
+export interface AuditItem {
+  id: string;
+  occurred_at: string;
+  endpoint_type: string;
+  provider_name: string | null;
+  model_alias: string | null;
+  upstream_model: string | null;
+  api_key_id: string | null;
+  api_key_name: string | null;
+  api_key_masked_preview: string | null;
+  status_category: string;
+  http_status: number;
+  latency_ms: number;
+  input_tokens: number | null;
+  cached_input_tokens: number;
+  output_tokens: number | null;
+  total_tokens: number | null;
+  estimated_cost: number | null;
+  error_summary: string | null;
+  client_ip: string | null;
+}
+
+export interface AuditResponse {
+  items: AuditItem[];
+  pagination: {
+    page: number;
+    pageSize: number;
+    total: number;
+    totalPages: number;
+  };
+}
+
+export interface SystemStatus {
+  ready: boolean;
+  readyErrors: string[];
+  dataDir: string;
+  dbPath: string;
+  timezone: string;
+  externalBaseUrl: string | null;
+  adminExternalBaseUrl: string | null;
+  detectedBaseUrl: string;
+  recommendedApiBaseUrl: string;
+  recommendedAdminUrl: string;
+  trustProxy: boolean;
+  maxRequestBodySizeBytes: number;
+  upstreamTimeoutMs: number;
+  loginRateLimit: {
+    windowMs: number;
+    max: number;
+  };
+  apiRateLimit: {
+    windowMs: number;
+    max: number;
+  };
+  maxActiveProxyRequests: number;
+  adminWhitelistEnabled: boolean;
+  apiWhitelistEnabled: boolean;
+  appliedMigrations: string[];
+  activeApiKeyCount: number;
+  totalApiKeyCount: number;
+  warnings: string[];
 }
 
 export const api = {
@@ -153,12 +336,12 @@ export const api = {
           method: "GET"
         }
       ),
-    createApiKey: (name: string) =>
+    createApiKey: (payload: ApiKeyMutationPayload) =>
       request<{ item: ApiKeyItem; createdKeyPlaintext: string }>("/admin/api/security/api-keys", {
         method: "POST",
-        body: JSON.stringify({ name })
+        body: JSON.stringify(payload)
       }),
-    updateApiKey: (apiKeyId: string, payload: Partial<Pick<ApiKeyItem, "name" | "enabled">>) =>
+    updateApiKey: (apiKeyId: string, payload: Partial<ApiKeyMutationPayload>) =>
       request<{ item: ApiKeyItem }>(`/admin/api/security/api-keys/${apiKeyId}`, {
         method: "PATCH",
         body: JSON.stringify(payload)
@@ -172,165 +355,3 @@ export const api = {
     status: () => request<SystemStatus>("/admin/api/system/status", { method: "GET" })
   }
 };
-
-export interface ProviderPayload {
-  name: string;
-  baseUrl: string;
-  apiKey: string;
-  enabled: boolean;
-  testTimeoutMs: number;
-}
-
-export interface ProviderItem {
-  id: string;
-  name: string;
-  baseUrl: string;
-  enabled: boolean;
-  testTimeoutMs: number;
-  apiKeyPreview: string | null;
-}
-
-export interface ApiKeyItem {
-  id: string;
-  name: string;
-  maskedPreview: string;
-  enabled: boolean;
-  deletedAt: string | null;
-  lastUsedAt: string | null;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface BindingPayload {
-  providerId: string;
-  upstreamModel: string;
-  inputPrice: number;
-  outputPrice: number;
-  enabled: boolean;
-}
-
-export interface BindingItem extends BindingPayload {
-  id: string;
-  providerName: string;
-  runtimePriority: number;
-  defaultPriority: number;
-}
-
-export interface ModelPayload {
-  alias: string;
-  displayName: string;
-  enabled: boolean;
-}
-
-export interface ModelItem extends ModelPayload {
-  id: string;
-  bindings: BindingItem[];
-}
-
-export interface TrendPoint {
-  label: string;
-  requests: number;
-  successes: number;
-  failures: number;
-  totalTokens: number;
-  estimatedCost: number;
-  averageLatencyMs: number;
-  p95LatencyMs: number;
-}
-
-export interface DashboardCard {
-  key: string;
-  label: string;
-  requests: number;
-  successes: number;
-  failures: number;
-  totalTokens: number;
-  estimatedCost: number;
-  averageLatencyMs: number;
-  p95LatencyMs: number;
-  trend: TrendPoint[];
-}
-
-export interface DashboardSummary {
-  range: "day" | "week" | "month";
-  windowStart: string;
-  windowEnd: string;
-  overall: {
-    requests: number;
-    successes: number;
-    failures: number;
-    errorRate: number;
-    inputTokens: number;
-    outputTokens: number;
-    totalTokens: number;
-    estimatedCost: number;
-    averageLatencyMs: number;
-    p50LatencyMs: number;
-    p95LatencyMs: number;
-    missingUsageCount: number;
-  };
-  trend: TrendPoint[];
-  providerCards: DashboardCard[];
-  modelCards: DashboardCard[];
-  apiKeyCards: DashboardCard[];
-}
-
-export interface AuditItem {
-  id: string;
-  occurred_at: string;
-  endpoint_type: string;
-  provider_name: string | null;
-  model_alias: string | null;
-  upstream_model: string | null;
-  api_key_id: string | null;
-  api_key_name: string | null;
-  api_key_masked_preview: string | null;
-  status_category: string;
-  http_status: number;
-  latency_ms: number;
-  total_tokens: number | null;
-  estimated_cost: number | null;
-  error_summary: string | null;
-  client_ip: string | null;
-}
-
-export interface AuditResponse {
-  items: AuditItem[];
-  pagination: {
-    page: number;
-    pageSize: number;
-    total: number;
-    totalPages: number;
-  };
-}
-
-export interface SystemStatus {
-  ready: boolean;
-  readyErrors: string[];
-  dataDir: string;
-  dbPath: string;
-  timezone: string;
-  externalBaseUrl: string | null;
-  adminExternalBaseUrl: string | null;
-  detectedBaseUrl: string;
-  recommendedApiBaseUrl: string;
-  recommendedAdminUrl: string;
-  trustProxy: boolean;
-  maxRequestBodySizeBytes: number;
-  upstreamTimeoutMs: number;
-  loginRateLimit: {
-    windowMs: number;
-    max: number;
-  };
-  apiRateLimit: {
-    windowMs: number;
-    max: number;
-  };
-  maxActiveProxyRequests: number;
-  adminWhitelistEnabled: boolean;
-  apiWhitelistEnabled: boolean;
-  appliedMigrations: string[];
-  activeApiKeyCount: number;
-  totalApiKeyCount: number;
-  warnings: string[];
-}

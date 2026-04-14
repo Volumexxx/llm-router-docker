@@ -20,6 +20,7 @@ import { ProvidersPage } from "./pages/ProvidersPage.tsx";
 import { SystemPage } from "./pages/SystemPage.tsx";
 
 type Section = "dashboard" | "providers" | "models" | "audit" | "system";
+
 type AuditFilters = {
   providerId: string;
   apiKeyId: string;
@@ -27,6 +28,13 @@ type AuditFilters = {
   statusCategory: string;
   endpointType: string;
   page: number;
+};
+
+type ApiKeyDraft = {
+  name: string;
+  enabled: boolean;
+  allowedProviderIds: string[];
+  allowedModelAliasIds: string[];
 };
 
 const defaultProviderForm = {
@@ -51,13 +59,22 @@ const defaultBindingForm: BindingPayload = {
   enabled: true
 };
 
-function buildApiKeyDrafts(items: ApiKeyItem[]) {
+const defaultApiKeyDraft: ApiKeyDraft = {
+  name: "",
+  enabled: true,
+  allowedProviderIds: [],
+  allowedModelAliasIds: []
+};
+
+function buildApiKeyDrafts(items: ApiKeyItem[]): Record<string, ApiKeyDraft> {
   return Object.fromEntries(
     items.map((item) => [
       item.id,
       {
         name: item.name,
-        enabled: item.enabled
+        enabled: item.enabled,
+        allowedProviderIds: item.allowedProviderIds,
+        allowedModelAliasIds: item.allowedModelAliasIds
       }
     ])
   );
@@ -94,8 +111,8 @@ export default function App() {
   const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null);
   const [apiKeys, setApiKeys] = useState<ApiKeyItem[]>([]);
   const [auditApiKeys, setAuditApiKeys] = useState<ApiKeyItem[]>([]);
-  const [apiKeyDrafts, setApiKeyDrafts] = useState<Record<string, { name: string; enabled: boolean }>>({});
-  const [newApiKeyName, setNewApiKeyName] = useState("");
+  const [apiKeyDrafts, setApiKeyDrafts] = useState<Record<string, ApiKeyDraft>>({});
+  const [newApiKeyDraft, setNewApiKeyDraft] = useState<ApiKeyDraft>(defaultApiKeyDraft);
   const [createdApiKeyPlaintext, setCreatedApiKeyPlaintext] = useState<string | null>(null);
 
   const [loginForm, setLoginForm] = useState({
@@ -104,12 +121,12 @@ export default function App() {
   });
 
   const modelAliasOptions = useMemo(
-    () => models.map((model) => model.alias).sort((a, b) => a.localeCompare(b)),
+    () => models.map((model) => model.alias).sort((left, right) => left.localeCompare(right)),
     [models]
   );
 
   const handleError = (reason: unknown) => {
-    setError(reason instanceof Error ? reason.message : "操作失败");
+    setError(reason instanceof Error ? reason.message : "Operation failed");
     setNotice(null);
   };
 
@@ -294,7 +311,7 @@ export default function App() {
   };
 
   if (loading) {
-    return <main className="shell loading-state">正在初始化管理台...</main>;
+    return <main className="shell loading-state">Loading admin console...</main>;
   }
 
   if (!user) {
@@ -310,7 +327,7 @@ export default function App() {
             .then(async (response) => {
               setUser(response.user);
               await refreshAll();
-              handleNotice("后台登录成功");
+              handleNotice("Signed in successfully");
             })
             .catch(handleError);
         }}
@@ -323,16 +340,17 @@ export default function App() {
       <aside className="sidebar">
         <div>
           <p className="eyebrow">LLM Router</p>
-          <h1>公网版控制台</h1>
-          <p className="muted">管理员：{user.username}</p>
+          <h1>Public Router Console</h1>
+          <p className="muted">Admin: {user.username}</p>
         </div>
+
         <nav className="nav">
           {[
-            ["dashboard", "概览仪表盘"],
-            ["providers", "Provider 管理"],
-            ["models", "模型与路由"],
-            ["audit", "审计日志"],
-            ["system", "系统与安全"]
+            ["dashboard", "Dashboard"],
+            ["providers", "Providers"],
+            ["models", "Models & Routing"],
+            ["audit", "Audit"],
+            ["system", "System & API Keys"]
           ].map(([value, label]) => (
             <button
               key={value}
@@ -344,6 +362,7 @@ export default function App() {
             </button>
           ))}
         </nav>
+
         <button
           type="button"
           className="ghost"
@@ -352,41 +371,42 @@ export default function App() {
               .logout()
               .then(() => {
                 setUser(null);
-                handleNotice("已退出登录");
+                handleNotice("Signed out");
               })
               .catch(handleError);
           }}
         >
-          退出登录
+          Sign Out
         </button>
       </aside>
 
       <section className="content">
         <header className="topbar">
           <div>
-            <p className="eyebrow">运行态</p>
+            <p className="eyebrow">Runtime</p>
             <h2>
               {section === "dashboard"
-                ? "运行总览"
+                ? "Operations Dashboard"
                 : section === "providers"
-                  ? "Provider 管理"
+                  ? "Provider Management"
                   : section === "models"
-                    ? "模型别名与路由"
+                    ? "Model Routing"
                     : section === "audit"
-                      ? "审计检索"
-                      : "系统状态与 API Key"}
+                      ? "Audit Search"
+                      : "System Status & API Keys"}
             </h2>
           </div>
+
           <button
             type="button"
             className="secondary"
             onClick={() => {
               void refreshAll()
-                .then(() => handleNotice("数据已刷新"))
+                .then(() => handleNotice("Data refreshed"))
                 .catch(handleError);
             }}
           >
-            立即刷新
+            Refresh Now
           </button>
         </header>
 
@@ -449,32 +469,38 @@ export default function App() {
         {section === "system" ? (
           <SystemPage
             systemStatus={systemStatus}
+            providers={providers}
+            models={models}
             apiKeys={apiKeys}
             apiKeyDrafts={apiKeyDrafts}
             setApiKeyDrafts={setApiKeyDrafts}
-            newApiKeyName={newApiKeyName}
-            setNewApiKeyName={setNewApiKeyName}
+            newApiKeyDraft={newApiKeyDraft}
+            setNewApiKeyDraft={setNewApiKeyDraft}
             createdApiKeyPlaintext={createdApiKeyPlaintext}
             onCreateApiKey={() => {
-              if (!newApiKeyName.trim()) {
-                setError("请先填写 API Key 名称");
+              if (!newApiKeyDraft.name.trim()) {
+                setError("Please enter an API key name");
                 return;
               }
 
               void api.security
-                .createApiKey(newApiKeyName.trim())
+                .createApiKey({
+                  name: newApiKeyDraft.name.trim(),
+                  allowedProviderIds: newApiKeyDraft.allowedProviderIds,
+                  allowedModelAliasIds: newApiKeyDraft.allowedModelAliasIds
+                })
                 .then(async (response) => {
-                  setNewApiKeyName("");
+                  setNewApiKeyDraft(defaultApiKeyDraft);
                   setCreatedApiKeyPlaintext(response.createdKeyPlaintext);
                   await Promise.all([refreshApiKeys(), refreshSystem()]);
-                  handleNotice(`API Key ${response.item.name} 已创建`);
+                  handleNotice(`API key ${response.item.name} created`);
                 })
                 .catch(handleError);
             }}
             onSaveApiKey={(apiKeyId) => {
               const draft = apiKeyDrafts[apiKeyId];
               if (!draft) {
-                setError("没有可保存的 API Key 草稿");
+                setError("No pending API key changes found");
                 return;
               }
 
@@ -482,18 +508,22 @@ export default function App() {
                 .updateApiKey(apiKeyId, draft)
                 .then(async (response) => {
                   await Promise.all([refreshApiKeys(), refreshSystem()]);
-                  handleNotice(`API Key ${response.item.name} 已更新`);
+                  handleNotice(`API key ${response.item.name} updated`);
                 })
                 .catch(handleError);
             }}
             onDeleteApiKey={(apiKeyId) => {
               const current = apiKeys.find((item) => item.id === apiKeyId);
               if (!current) {
-                setError("API Key 不存在");
+                setError("API key not found");
                 return;
               }
 
-              if (!window.confirm(`确认删除 API Key「${current.name}」吗？删除后将立即失效。`)) {
+              if (
+                !window.confirm(
+                  `Delete API key "${current.name}" now? It will stop working immediately.`
+                )
+              ) {
                 return;
               }
 
@@ -501,7 +531,7 @@ export default function App() {
                 .deleteApiKey(apiKeyId)
                 .then(async () => {
                   await Promise.all([refreshApiKeys(), refreshSystem(), refreshAudit(1)]);
-                  handleNotice(`API Key ${current.name} 已删除`);
+                  handleNotice(`API key ${current.name} deleted`);
                 })
                 .catch(handleError);
             }}

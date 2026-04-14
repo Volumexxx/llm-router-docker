@@ -2,6 +2,7 @@ import type { DatabaseSync } from "node:sqlite";
 
 import type { z } from "zod";
 
+import type { GatewayApiKeyContext } from "../types.ts";
 import {
   bindingCreateSchema,
   bindingUpdateSchema,
@@ -43,6 +44,23 @@ export interface RoutableBinding {
   inputPrice: number;
   outputPrice: number;
 }
+
+type GatewayRoutingScope = Pick<
+  GatewayApiKeyContext,
+  "allowedProviderIds" | "allowedModelAliasIds"
+>;
+
+export type RoutableBindingResolution =
+  | {
+      kind: "matched";
+      binding: RoutableBinding;
+    }
+  | {
+      kind: "not_found";
+    }
+  | {
+      kind: "scope_denied";
+    };
 
 export function listModels(sqlite: DatabaseSync): ModelAliasView[] {
   const models = sqlite
@@ -349,30 +367,92 @@ export function saveRuntimeOrderAsDefault(sqlite: DatabaseSync, modelId: string)
   return getModelById(sqlite, modelId);
 }
 
-export function listVisibleModels(sqlite: DatabaseSync) {
-  return sqlite
+function buildScopeSets(gatewayScope?: GatewayRoutingScope): {
+  allowedProviderIds: Set<string> | null;
+  allowedModelAliasIds: Set<string> | null;
+} {
+  return {
+    allowedProviderIds: gatewayScope?.allowedProviderIds
+      ? new Set(gatewayScope.allowedProviderIds)
+      : null,
+    allowedModelAliasIds: gatewayScope?.allowedModelAliasIds
+      ? new Set(gatewayScope.allowedModelAliasIds)
+      : null
+  };
+}
+
+function isBindingAllowedByScope(
+  row: {
+    provider_id: string;
+    model_alias_id: string;
+  },
+  scopeSets: {
+    allowedProviderIds: Set<string> | null;
+    allowedModelAliasIds: Set<string> | null;
+  }
+): boolean {
+  if (scopeSets.allowedProviderIds && !scopeSets.allowedProviderIds.has(row.provider_id)) {
+    return false;
+  }
+
+  if (scopeSets.allowedModelAliasIds && !scopeSets.allowedModelAliasIds.has(row.model_alias_id)) {
+    return false;
+  }
+
+  return true;
+}
+
+export function listVisibleModels(sqlite: DatabaseSync, gatewayScope?: GatewayRoutingScope) {
+  const scopeSets = buildScopeSets(gatewayScope);
+  const rows = sqlite
     .prepare(
       `
-        SELECT DISTINCT
+        SELECT
           model_aliases.alias,
-          model_aliases.display_name
+          model_aliases.display_name,
+          model_aliases.id AS model_alias_id,
+          providers.id AS provider_id
         FROM model_aliases
         INNER JOIN model_bindings ON model_bindings.model_alias_id = model_aliases.id
         INNER JOIN providers ON providers.id = model_bindings.provider_id
         WHERE model_aliases.enabled = 1
           AND model_bindings.enabled = 1
           AND providers.enabled = 1
-        ORDER BY model_aliases.alias ASC
+        ORDER BY model_aliases.alias ASC, model_bindings.runtime_priority ASC
       `
     )
-    .all() as Array<{ alias: string; display_name: string }>;
+    .all() as Array<{
+    alias: string;
+    display_name: string;
+    model_alias_id: string;
+    provider_id: string;
+  }>;
+
+  const visibleModels = new Map<string, { alias: string; display_name: string }>();
+
+  for (const row of rows) {
+    if (!isBindingAllowedByScope(row, scopeSets)) {
+      continue;
+    }
+
+    if (!visibleModels.has(row.model_alias_id)) {
+      visibleModels.set(row.model_alias_id, {
+        alias: row.alias,
+        display_name: row.display_name
+      });
+    }
+  }
+
+  return Array.from(visibleModels.values()).sort((left, right) => left.alias.localeCompare(right.alias));
 }
 
 export function resolveRoutableBinding(
   sqlite: DatabaseSync,
-  alias: string
-): RoutableBinding | null {
-  const row = sqlite
+  alias: string,
+  gatewayScope?: GatewayRoutingScope
+): RoutableBindingResolution {
+  const scopeSets = buildScopeSets(gatewayScope);
+  const rows = sqlite
     .prepare(
       `
         SELECT
@@ -395,40 +475,49 @@ export function resolveRoutableBinding(
           AND model_bindings.enabled = 1
           AND providers.enabled = 1
         ORDER BY model_bindings.runtime_priority ASC
-        LIMIT 1
       `
     )
-    .get(alias) as
-    | {
-        binding_id: string;
-        model_alias_id: string;
-        model_alias: string;
-        display_name: string;
-        provider_id: string;
-        provider_name: string;
-        provider_base_url: string;
-        provider_api_key_encrypted: string;
-        upstream_model: string;
-        input_price: number;
-        output_price: number;
-      }
-    | undefined;
+    .all(alias) as Array<{
+    binding_id: string;
+    model_alias_id: string;
+    model_alias: string;
+    display_name: string;
+    provider_id: string;
+    provider_name: string;
+    provider_base_url: string;
+    provider_api_key_encrypted: string;
+    upstream_model: string;
+    input_price: number;
+    output_price: number;
+  }>;
 
-  if (!row) {
-    return null;
+  if (rows.length === 0) {
+    return {
+      kind: "not_found"
+    };
+  }
+
+  const matchedRow = rows.find((row) => isBindingAllowedByScope(row, scopeSets));
+  if (!matchedRow) {
+    return {
+      kind: "scope_denied"
+    };
   }
 
   return {
-    bindingId: row.binding_id,
-    modelAliasId: row.model_alias_id,
-    modelAlias: row.model_alias,
-    displayName: row.display_name,
-    providerId: row.provider_id,
-    providerName: row.provider_name,
-    providerBaseUrl: row.provider_base_url,
-    providerApiKeyEncrypted: row.provider_api_key_encrypted,
-    upstreamModel: row.upstream_model,
-    inputPrice: Number(row.input_price),
-    outputPrice: Number(row.output_price)
+    kind: "matched",
+    binding: {
+      bindingId: matchedRow.binding_id,
+      modelAliasId: matchedRow.model_alias_id,
+      modelAlias: matchedRow.model_alias,
+      displayName: matchedRow.display_name,
+      providerId: matchedRow.provider_id,
+      providerName: matchedRow.provider_name,
+      providerBaseUrl: matchedRow.provider_base_url,
+      providerApiKeyEncrypted: matchedRow.provider_api_key_encrypted,
+      upstreamModel: matchedRow.upstream_model,
+      inputPrice: Number(matchedRow.input_price),
+      outputPrice: Number(matchedRow.output_price)
+    }
   };
 }

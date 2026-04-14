@@ -8,12 +8,22 @@ import {
 import { sendJsonError, sendValidationError } from "../../lib/http.ts";
 import { enforceAdminIpAllowlist, requireAdminSession } from "../../security/auth.ts";
 import {
+  ApiKeyScopeValidationError,
   createApiKey,
   deleteApiKey,
   listApiKeys,
   updateApiKey
 } from "../../services/api-keys.ts";
 import { writeSecurityAuditFromRequest } from "../../services/audit.ts";
+
+function sendScopeValidationError(reply: { code: (statusCode: number) => { send: (payload: unknown) => void } }, error: ApiKeyScopeValidationError): void {
+  reply.code(400).send({
+    error: {
+      code: "api_key_scope_invalid_reference",
+      message: `${error.field} contains unknown IDs: ${error.missingIds.join(", ")}`
+    }
+  });
+}
 
 export async function registerAdminSecurityRoutes(app: FastifyInstance): Promise<void> {
   const protectedHandlers = [enforceAdminIpAllowlist, requireAdminSession];
@@ -51,12 +61,17 @@ export async function registerAdminSecurityRoutes(app: FastifyInstance): Promise
           statusCategory: "success",
           httpStatus: 201,
           latencyMs: 0,
-          errorSummary: `创建 API Key：${result.item.name}`
+          errorSummary: `Created API key: ${result.item.name}`
         });
 
         reply.code(201).send(result);
       } catch (error) {
         if (sendValidationError(reply, error)) {
+          return;
+        }
+
+        if (error instanceof ApiKeyScopeValidationError) {
+          sendScopeValidationError(reply, error);
           return;
         }
 
@@ -75,7 +90,7 @@ export async function registerAdminSecurityRoutes(app: FastifyInstance): Promise
         const item = updateApiKey(request.server.appCtx.database.sqlite, apiKeyId, input);
 
         if (!item) {
-          sendJsonError(reply, 404, "api_key_not_found", "API Key 不存在");
+          sendJsonError(reply, 404, "api_key_not_found", "API key not found");
           return;
         }
 
@@ -85,12 +100,17 @@ export async function registerAdminSecurityRoutes(app: FastifyInstance): Promise
           statusCategory: "success",
           httpStatus: 200,
           latencyMs: 0,
-          errorSummary: `更新 API Key：${item.name}`
+          errorSummary: `Updated API key: ${item.name}`
         });
 
         reply.send({ item });
       } catch (error) {
         if (sendValidationError(reply, error)) {
+          return;
+        }
+
+        if (error instanceof ApiKeyScopeValidationError) {
+          sendScopeValidationError(reply, error);
           return;
         }
 
@@ -107,7 +127,7 @@ export async function registerAdminSecurityRoutes(app: FastifyInstance): Promise
       const deleted = deleteApiKey(request.server.appCtx.database.sqlite, apiKeyId);
 
       if (!deleted) {
-        sendJsonError(reply, 404, "api_key_not_found", "API Key 不存在");
+        sendJsonError(reply, 404, "api_key_not_found", "API key not found");
         return;
       }
 
@@ -117,7 +137,7 @@ export async function registerAdminSecurityRoutes(app: FastifyInstance): Promise
         statusCategory: "success",
         httpStatus: 200,
         latencyMs: 0,
-        errorSummary: `删除 API Key：${apiKeyId}`
+        errorSummary: `Deleted API key: ${apiKeyId}`
       });
 
       reply.send({ success: true });

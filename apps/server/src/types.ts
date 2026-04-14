@@ -2,13 +2,15 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
 
 import type { createSqliteConnection } from "../../../packages/db/src/index.ts";
 
-import type { MemoryRateLimiter } from "./security/rate-limit.ts";
 import type { RuntimeConfig } from "./config.ts";
+import type { MemoryRateLimiter } from "./security/rate-limit.ts";
 
 export interface GatewayApiKeyContext {
   id: string;
   name: string;
   maskedPreview: string;
+  allowedProviderIds: string[] | null;
+  allowedModelAliasIds: string[] | null;
 }
 
 export interface RuntimeState {

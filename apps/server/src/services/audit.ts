@@ -7,7 +7,8 @@ import type { z } from "zod";
 import {
   auditQuerySchema,
   auditStatusSchema,
-  endpointTypeSchema
+  endpointTypeSchema,
+  normalizeDisplayInputTokens
 } from "../../../../packages/shared/src/index.ts";
 import { createId, nowIso } from "../lib/utils.ts";
 import { getClientIp } from "../security/ip.ts";
@@ -27,6 +28,7 @@ export interface AuditLogInput {
   httpStatus: number;
   latencyMs: number;
   inputTokens?: number | null;
+  cachedInputTokens?: number | null;
   outputTokens?: number | null;
   totalTokens?: number | null;
   estimatedCost?: number | null;
@@ -57,6 +59,7 @@ export function writeAuditLog(sqlite: DatabaseSync, input: AuditLogInput): void 
           http_status,
           latency_ms,
           input_tokens,
+          cached_input_tokens,
           output_tokens,
           total_tokens,
           estimated_cost,
@@ -65,7 +68,7 @@ export function writeAuditLog(sqlite: DatabaseSync, input: AuditLogInput): void 
           client_ip,
           user_agent
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `
     )
     .run(
@@ -85,6 +88,7 @@ export function writeAuditLog(sqlite: DatabaseSync, input: AuditLogInput): void 
       input.httpStatus,
       input.latencyMs,
       input.inputTokens ?? null,
+      input.cachedInputTokens ?? null,
       input.outputTokens ?? null,
       input.totalTokens ?? null,
       input.estimatedCost ?? null,
@@ -108,6 +112,35 @@ export function writeSecurityAuditFromRequest(
 }
 
 export interface AuditQueryInput extends z.infer<typeof auditQuerySchema> {}
+
+function mapAuditRow(row: Record<string, unknown>) {
+  const rawInputTokens =
+    typeof row.input_tokens === "number" && Number.isFinite(row.input_tokens)
+      ? row.input_tokens
+      : null;
+  const cachedInputTokens =
+    typeof row.cached_input_tokens === "number" && Number.isFinite(row.cached_input_tokens)
+      ? row.cached_input_tokens
+      : 0;
+  const outputTokens =
+    typeof row.output_tokens === "number" && Number.isFinite(row.output_tokens)
+      ? row.output_tokens
+      : null;
+  const totalTokens =
+    typeof row.total_tokens === "number" && Number.isFinite(row.total_tokens)
+      ? row.total_tokens
+      : rawInputTokens != null || outputTokens != null
+        ? (rawInputTokens ?? 0) + (outputTokens ?? 0)
+        : null;
+
+  return {
+    ...row,
+    input_tokens: normalizeDisplayInputTokens(rawInputTokens, cachedInputTokens),
+    cached_input_tokens: cachedInputTokens,
+    output_tokens: outputTokens,
+    total_tokens: totalTokens
+  };
+}
 
 export function queryAuditLogs(sqlite: DatabaseSync, input: AuditQueryInput) {
   const clauses: string[] = [];
@@ -156,14 +189,14 @@ export function queryAuditLogs(sqlite: DatabaseSync, input: AuditQueryInput) {
         OFFSET ?
       `
     )
-    .all(...params, input.pageSize, offset);
+    .all(...params, input.pageSize, offset) as Array<Record<string, unknown>>;
 
   const totalRow = sqlite
     .prepare(`SELECT COUNT(*) AS count FROM audit_logs ${where}`)
     .get(...params) as { count: number };
 
   return {
-    items,
+    items: items.map((row) => mapAuditRow(row)),
     pagination: {
       page: input.page,
       pageSize: input.pageSize,

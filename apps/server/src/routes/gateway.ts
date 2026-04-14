@@ -5,10 +5,10 @@ import { sendJsonError } from "../lib/http.ts";
 import { clampText, parseJson } from "../lib/utils.ts";
 import { requireGatewayBearerToken, rejectGatewayRequest } from "../security/auth.ts";
 import { getClientIp, isIpAllowed } from "../security/ip.ts";
-import { listVisibleModels, resolveRoutableBinding } from "../services/models.ts";
-import { proxyProviderJson, streamProviderResponse } from "../services/provider-client.ts";
 import { authenticateApiKey } from "../services/api-keys.ts";
 import { writeAuditLog, writeSecurityAuditFromRequest } from "../services/audit.ts";
+import { listVisibleModels, resolveRoutableBinding } from "../services/models.ts";
+import { proxyProviderJson, streamProviderResponse } from "../services/provider-client.ts";
 
 function classifyFailure(errorCode: string | null): "upstream_error" | "network_error" {
   return errorCode === "network_error" ? "network_error" : "upstream_error";
@@ -32,7 +32,7 @@ async function authorizeGatewayRequest(
   const ip = getClientIp(request);
 
   if (!isIpAllowed(ip, appCtx.config.apiCidrs)) {
-    rejectGatewayRequest(request, reply, "api_ip_not_allowed", 403, "当前来源 IP 不在 API 白名单中");
+    rejectGatewayRequest(request, reply, "api_ip_not_allowed", 403, "Current IP is not allowed");
     return false;
   }
 
@@ -50,14 +50,14 @@ async function authorizeGatewayRequest(
       httpStatus: 429,
       latencyMs: 0,
       errorCode: "api_rate_limited",
-      errorSummary: "API 请求过于频繁"
+      errorSummary: "API rate limit exceeded"
     });
 
     reply.header("retry-after", Math.ceil(limiter.retryAfterMs / 1000));
     reply.code(429).send({
       error: {
         code: "api_rate_limited",
-        message: "API 请求过于频繁，请稍后再试"
+        message: "API rate limit exceeded, please retry later"
       }
     });
     return false;
@@ -65,7 +65,7 @@ async function authorizeGatewayRequest(
 
   const bearerToken = requireGatewayBearerToken(request);
   if (!bearerToken) {
-    rejectGatewayRequest(request, reply, "gateway_auth_required", 401, "缺少 API Key");
+    rejectGatewayRequest(request, reply, "gateway_auth_required", 401, "Missing API key");
     return false;
   }
 
@@ -76,7 +76,7 @@ async function authorizeGatewayRequest(
       reply,
       "api_keys_not_configured",
       503,
-      "系统尚未创建可用的 API Key，请先登录后台创建并启用 API Key",
+      "No active API key is configured yet. Please create one in the admin console first.",
       {
         statusCategory: "configuration_error"
       }
@@ -85,14 +85,16 @@ async function authorizeGatewayRequest(
   }
 
   if (authResult.kind !== "matched" || !authResult.apiKey) {
-    rejectGatewayRequest(request, reply, "gateway_auth_invalid", 401, "API Key 无效");
+    rejectGatewayRequest(request, reply, "gateway_auth_invalid", 401, "Invalid API key");
     return false;
   }
 
   request.gatewayApiKey = {
     id: authResult.apiKey.id,
     name: authResult.apiKey.name,
-    maskedPreview: authResult.apiKey.maskedPreview
+    maskedPreview: authResult.apiKey.maskedPreview,
+    allowedProviderIds: authResult.apiKey.allowedProviderIds,
+    allowedModelAliasIds: authResult.apiKey.allowedModelAliasIds
   };
 
   return true;
@@ -121,18 +123,23 @@ async function handleProxyEndpoint(
         httpStatus: 400,
         latencyMs: Date.now() - started,
         errorCode: "model_required",
-        errorSummary: "请求中缺少 model",
+        errorSummary: "Request body is missing model",
         clientIp: getClientIp(request),
         userAgent: request.headers["user-agent"]?.toString() ?? null,
         ...buildApiKeyAuditContext(request)
       });
 
-      sendJsonError(reply, 400, "model_required", "请求中缺少 model");
+      sendJsonError(reply, 400, "model_required", "Request body is missing model");
       return;
     }
 
-    const binding = resolveRoutableBinding(request.server.appCtx.database.sqlite, requestedModel);
-    if (!binding) {
+    const resolution = resolveRoutableBinding(
+      request.server.appCtx.database.sqlite,
+      requestedModel,
+      request.gatewayApiKey ?? undefined
+    );
+
+    if (resolution.kind !== "matched") {
       writeAuditLog(request.server.appCtx.database.sqlite, {
         requestId: request.id,
         endpointType,
@@ -141,16 +148,18 @@ async function handleProxyEndpoint(
         statusCategory: "configuration_error",
         httpStatus: 404,
         latencyMs: Date.now() - started,
-        errorCode: "model_not_routable",
-        errorSummary: "模型别名未配置或当前没有可用路由",
+        errorCode: resolution.kind === "scope_denied" ? "api_key_scope_denied" : "model_not_routable",
+        errorSummary: "Model alias is not routable for the current API key",
         clientIp: getClientIp(request),
         userAgent: request.headers["user-agent"]?.toString() ?? null,
         ...buildApiKeyAuditContext(request)
       });
 
-      sendJsonError(reply, 404, "model_not_routable", "模型别名未配置或当前没有可用路由");
+      sendJsonError(reply, 404, "model_not_routable", "Model alias is not routable");
       return;
     }
+
+    const binding = resolution.binding;
 
     if (
       request.server.appCtx.state.activeProxyRequests >=
@@ -168,13 +177,18 @@ async function handleProxyEndpoint(
         httpStatus: 429,
         latencyMs: Date.now() - started,
         errorCode: "proxy_concurrency_limited",
-        errorSummary: "当前代理并发数已达到上限",
+        errorSummary: "Maximum active proxy request limit reached",
         clientIp: getClientIp(request),
         userAgent: request.headers["user-agent"]?.toString() ?? null,
         ...buildApiKeyAuditContext(request)
       });
 
-      sendJsonError(reply, 429, "proxy_concurrency_limited", "当前代理并发数已达到上限");
+      sendJsonError(
+        reply,
+        429,
+        "proxy_concurrency_limited",
+        "Maximum active proxy request limit reached"
+      );
       return;
     }
 
@@ -204,6 +218,7 @@ async function handleProxyEndpoint(
             httpStatus: result.httpStatus,
             latencyMs: Date.now() - started,
             inputTokens: result.usage.inputTokens,
+            cachedInputTokens: result.usage.cachedInputTokens,
             outputTokens: result.usage.outputTokens,
             totalTokens: result.usage.totalTokens,
             estimatedCost:
@@ -224,8 +239,8 @@ async function handleProxyEndpoint(
               : "network_error";
           const summary =
             error instanceof Error
-              ? clampText(error.message, 500) ?? "流式上游请求失败"
-              : "流式上游请求失败";
+              ? clampText(error.message, 500) ?? "Streaming upstream request failed"
+              : "Streaming upstream request failed";
 
           writeAuditLog(request.server.appCtx.database.sqlite, {
             requestId: request.id,
@@ -297,6 +312,7 @@ async function handleProxyEndpoint(
         httpStatus: result.httpStatus,
         latencyMs: Date.now() - started,
         inputTokens: result.usage.inputTokens,
+        cachedInputTokens: result.usage.cachedInputTokens,
         outputTokens: result.usage.outputTokens,
         totalTokens: result.usage.totalTokens,
         estimatedCost: result.estimatedCost,
@@ -317,7 +333,10 @@ export async function registerGatewayRoutes(app: FastifyInstance): Promise<void>
       return;
     }
 
-    const models = listVisibleModels(request.server.appCtx.database.sqlite);
+    const models = listVisibleModels(
+      request.server.appCtx.database.sqlite,
+      request.gatewayApiKey ?? undefined
+    );
 
     writeAuditLog(request.server.appCtx.database.sqlite, {
       requestId: request.id,

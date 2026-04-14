@@ -5,8 +5,8 @@ import type { FastifyReply } from "fastify";
 import type { TokenUsage } from "../../../../packages/shared/src/index.ts";
 import { estimateCost } from "../../../../packages/shared/src/index.ts";
 import type { RuntimeConfig } from "../config.ts";
-import { decryptSecret } from "../security/crypto.ts";
 import { extractUsage, getErrorSummary, joinUrl, parseJson } from "../lib/utils.ts";
+import { decryptSecret } from "../security/crypto.ts";
 import type { RoutableBinding } from "./models.ts";
 
 export interface ProviderTestResult {
@@ -66,7 +66,7 @@ export async function testProviderConnection(
     const parsed = parseJson<{ data?: unknown[] }>(bodyText);
 
     if (!response.ok) {
-      const { summary } = getErrorSummary(bodyText, "上游返回错误");
+      const { summary } = getErrorSummary(bodyText, "Upstream provider request failed");
       return {
         success: false,
         statusCode: response.status,
@@ -81,7 +81,7 @@ export async function testProviderConnection(
       statusCode: response.status,
       responseTimeMs: elapsed,
       visibleModelCount: Array.isArray(parsed?.data) ? parsed.data.length : null,
-      message: "连接成功"
+      message: "Provider connection succeeded"
     };
   } catch (error) {
     return {
@@ -89,7 +89,7 @@ export async function testProviderConnection(
       statusCode: null,
       responseTimeMs: Date.now() - started,
       visibleModelCount: null,
-      message: error instanceof Error ? error.message : "连接失败"
+      message: error instanceof Error ? error.message : "Provider connection failed"
     };
   }
 }
@@ -119,6 +119,7 @@ function copyUpstreamHeaders(reply: FastifyReply, response: Response): void {
 function extractUsageFromSseBlocks(chunks: string): TokenUsage {
   let inputTokens: number | null = null;
   let outputTokens: number | null = null;
+  let cachedInputTokens: number | null = null;
   let totalTokens: number | null = null;
 
   for (const block of chunks.split("\n\n")) {
@@ -137,6 +138,7 @@ function extractUsageFromSseBlocks(chunks: string): TokenUsage {
       const usage = extractUsage(parsed);
       inputTokens = usage.inputTokens ?? inputTokens;
       outputTokens = usage.outputTokens ?? outputTokens;
+      cachedInputTokens = usage.cachedInputTokens ?? cachedInputTokens;
       totalTokens = usage.totalTokens ?? totalTokens;
     }
   }
@@ -144,6 +146,7 @@ function extractUsageFromSseBlocks(chunks: string): TokenUsage {
   return {
     inputTokens,
     outputTokens,
+    cachedInputTokens,
     totalTokens
   };
 }
@@ -170,7 +173,7 @@ export async function proxyProviderJson(
 
     if (!response.ok) {
       const bodyText = await response.text();
-      const { code, summary } = getErrorSummary(bodyText, "上游返回错误");
+      const { code, summary } = getErrorSummary(bodyText, "Upstream provider request failed");
       return {
         ok: false,
         httpStatus: response.status,
@@ -199,11 +202,11 @@ export async function proxyProviderJson(
       bodyText: JSON.stringify({
         error: {
           code: "network_error",
-          message: error instanceof Error ? error.message : "上游网络错误"
+          message: error instanceof Error ? error.message : "Upstream network error"
         }
       }),
       errorCode: "network_error",
-      errorSummary: error instanceof Error ? error.message : "上游网络错误"
+      errorSummary: error instanceof Error ? error.message : "Upstream network error"
     };
   }
 }
@@ -235,7 +238,7 @@ export async function streamProviderResponse(
     const bodyText = await response.text();
     copyUpstreamHeaders(reply, response);
     reply.code(response.status).send(parseJson(bodyText) ?? bodyText);
-    const { code, summary } = getErrorSummary(bodyText, "上游返回错误");
+    const { code, summary } = getErrorSummary(bodyText, "Upstream provider request failed");
     throw Object.assign(new Error(summary), {
       statusCode: response.status,
       errorCode: code,
@@ -247,10 +250,10 @@ export async function streamProviderResponse(
     reply.code(502).send({
       error: {
         code: "empty_upstream_stream",
-        message: "上游没有返回可读流"
+        message: "Upstream did not return a readable stream"
       }
     });
-    throw Object.assign(new Error("上游没有返回可读流"), {
+    throw Object.assign(new Error("Upstream did not return a readable stream"), {
       statusCode: 502,
       errorCode: "empty_upstream_stream",
       bodyText: ""
