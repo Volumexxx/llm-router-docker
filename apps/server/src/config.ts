@@ -62,7 +62,7 @@ const rawConfigSchema = z.object({
   MAX_REQUEST_BODY_SIZE_MB: z.coerce.number().min(1).max(200).default(50),
   REQUEST_TIMEOUT_MS: z.coerce.number().int().min(1000).max(600000).default(120000),
   UPSTREAM_TIMEOUT_MS: z.coerce.number().int().min(1000).max(600000).default(120000),
-  PROVIDER_TEST_DEFAULT_TIMEOUT_MS: z.coerce.number().int().min(1000).max(120000).default(10000),
+  PROVIDER_TEST_DEFAULT_TIMEOUT_MS: z.coerce.number().int().min(1000).max(600000).default(10000),
   SESSION_TTL_HOURS: z.coerce.number().int().min(1).max(24 * 90).default(24 * 14),
   TRUST_PROXY: booleanish.default(false),
   EXTERNAL_BASE_URL: z.string().url().optional(),

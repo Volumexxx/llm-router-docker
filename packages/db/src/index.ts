@@ -1,8 +1,12 @@
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 
 import { migrations } from "./migrations.ts";
+
+const require = createRequire(import.meta.url);
+const { DatabaseSync } = require("node:sqlite") as typeof import("node:sqlite");
+type DatabaseSyncType = import("node:sqlite").DatabaseSync;
 
 export type SqliteDatabase = ReturnType<typeof createSqliteConnection>;
 
@@ -23,7 +27,7 @@ export function createSqliteConnection(dataDir: string) {
   };
 }
 
-export function migrateSqlite(sqlite: DatabaseSync): string[] {
+export function migrateSqlite(sqlite: DatabaseSyncType): string[] {
   sqlite.exec(`
     CREATE TABLE IF NOT EXISTS migration_state (
       version TEXT PRIMARY KEY NOT NULL,

@@ -59,13 +59,6 @@ const defaultBindingForm: BindingPayload = {
   enabled: true
 };
 
-const defaultApiKeyDraft: ApiKeyDraft = {
-  name: "",
-  enabled: true,
-  allowedProviderIds: [],
-  allowedModelAliasIds: []
-};
-
 function buildApiKeyDrafts(items: ApiKeyItem[]): Record<string, ApiKeyDraft> {
   return Object.fromEntries(
     items.map((item) => [
@@ -79,6 +72,41 @@ function buildApiKeyDrafts(items: ApiKeyItem[]): Record<string, ApiKeyDraft> {
     ])
   );
 }
+
+const sectionMeta: Record<
+  Section,
+  {
+    label: string;
+    title: string;
+    description: string;
+  }
+> = {
+  dashboard: {
+    label: "Dashboard",
+    title: "运行指标中心",
+    description: "查看整体运行态势，并从 Provider / Model / Key 三个维度深入分析。"
+  },
+  providers: {
+    label: "Providers",
+    title: "Provider 管理",
+    description: "维护上游连接信息、测试超时和密钥替换。"
+  },
+  models: {
+    label: "Models & Routing",
+    title: "模型与路由",
+    description: "在二级抽屉中维护模型别名、绑定关系和运行优先级。"
+  },
+  audit: {
+    label: "Audit",
+    title: "审计检索",
+    description: "按请求维度回溯模型调用、安全事件与 API Key 使用记录。"
+  },
+  system: {
+    label: "System & API Keys",
+    title: "系统与 API Keys",
+    description: "查看系统健康、创建 API Key，并在详情抽屉中配置权限范围。"
+  }
+};
 
 export default function App() {
   const [user, setUser] = useState<{ id: string; username: string } | null>(null);
@@ -112,7 +140,7 @@ export default function App() {
   const [apiKeys, setApiKeys] = useState<ApiKeyItem[]>([]);
   const [auditApiKeys, setAuditApiKeys] = useState<ApiKeyItem[]>([]);
   const [apiKeyDrafts, setApiKeyDrafts] = useState<Record<string, ApiKeyDraft>>({});
-  const [newApiKeyDraft, setNewApiKeyDraft] = useState<ApiKeyDraft>(defaultApiKeyDraft);
+  const [newApiKeyName, setNewApiKeyName] = useState("");
   const [createdApiKeyPlaintext, setCreatedApiKeyPlaintext] = useState<string | null>(null);
 
   const [loginForm, setLoginForm] = useState({
@@ -125,8 +153,10 @@ export default function App() {
     [models]
   );
 
+  const currentSectionMeta = sectionMeta[section];
+
   const handleError = (reason: unknown) => {
-    setError(reason instanceof Error ? reason.message : "Operation failed");
+    setError(reason instanceof Error ? reason.message : "操作失败，请稍后重试。");
     setNotice(null);
   };
 
@@ -311,7 +341,7 @@ export default function App() {
   };
 
   if (loading) {
-    return <main className="shell loading-state">Loading admin console...</main>;
+    return <main className="shell loading-state">正在加载管理台…</main>;
   }
 
   if (!user) {
@@ -327,7 +357,7 @@ export default function App() {
             .then(async (response) => {
               setUser(response.user);
               await refreshAll();
-              handleNotice("Signed in successfully");
+              handleNotice("登录成功。");
             })
             .catch(handleError);
         }}
@@ -338,76 +368,65 @@ export default function App() {
   return (
     <main className="shell app-shell">
       <aside className="sidebar">
-        <div>
-          <p className="eyebrow">LLM Router</p>
-          <h1>Public Router Console</h1>
-          <p className="muted">Admin: {user.username}</p>
-        </div>
-
-        <nav className="nav">
-          {[
-            ["dashboard", "Dashboard"],
-            ["providers", "Providers"],
-            ["models", "Models & Routing"],
-            ["audit", "Audit"],
-            ["system", "System & API Keys"]
-          ].map(([value, label]) => (
-            <button
-              key={value}
-              type="button"
-              className={section === value ? "nav-item active" : "nav-item"}
-              onClick={() => setSection(value as Section)}
-            >
-              {label}
-            </button>
-          ))}
-        </nav>
-
-        <button
-          type="button"
-          className="ghost"
-          onClick={() => {
-            void api.auth
-              .logout()
-              .then(() => {
-                setUser(null);
-                handleNotice("Signed out");
-              })
-              .catch(handleError);
-          }}
-        >
-          Sign Out
-        </button>
-      </aside>
-
-      <section className="content">
-        <header className="topbar">
-          <div>
-            <p className="eyebrow">Runtime</p>
-            <h2>
-              {section === "dashboard"
-                ? "Operations Dashboard"
-                : section === "providers"
-                  ? "Provider Management"
-                  : section === "models"
-                    ? "Model Routing"
-                    : section === "audit"
-                      ? "Audit Search"
-                      : "System Status & API Keys"}
-            </h2>
+        <div className="stack sidebar-stack">
+          <div className="stack compact-stack">
+            <p className="eyebrow">LLM Router</p>
+            <h1>Public Router Console</h1>
+            <p className="muted">管理员：{user.username}</p>
           </div>
 
+          <nav className="nav">
+            {(Object.keys(sectionMeta) as Section[]).map((value) => (
+              <button
+                key={value}
+                type="button"
+                className={section === value ? "nav-item active" : "nav-item"}
+                onClick={() => setSection(value)}
+              >
+                <span>{sectionMeta[value].label}</span>
+                <small>{sectionMeta[value].title}</small>
+              </button>
+            ))}
+          </nav>
+        </div>
+
+        <div className="stack compact-stack">
           <button
             type="button"
             className="secondary"
             onClick={() => {
               void refreshAll()
-                .then(() => handleNotice("Data refreshed"))
+                .then(() => handleNotice("数据已刷新。"))
                 .catch(handleError);
             }}
           >
-            Refresh Now
+            立即刷新
           </button>
+          <button
+            type="button"
+            className="ghost"
+            onClick={() => {
+              void api.auth
+                .logout()
+                .then(() => {
+                  setUser(null);
+                  handleNotice("已退出登录。");
+                })
+                .catch(handleError);
+            }}
+          >
+            退出登录
+          </button>
+        </div>
+      </aside>
+
+      <section className="content">
+        <header className="topbar">
+          <div className="stack compact-stack">
+            <p className="eyebrow">{currentSectionMeta.label}</p>
+            <h2>{currentSectionMeta.title}</h2>
+            <p className="muted">{currentSectionMeta.description}</p>
+          </div>
         </header>
 
         {notice ? <p className="feedback success">{notice}</p> : null}
@@ -474,33 +493,31 @@ export default function App() {
             apiKeys={apiKeys}
             apiKeyDrafts={apiKeyDrafts}
             setApiKeyDrafts={setApiKeyDrafts}
-            newApiKeyDraft={newApiKeyDraft}
-            setNewApiKeyDraft={setNewApiKeyDraft}
+            newApiKeyName={newApiKeyName}
+            setNewApiKeyName={setNewApiKeyName}
             createdApiKeyPlaintext={createdApiKeyPlaintext}
             onCreateApiKey={() => {
-              if (!newApiKeyDraft.name.trim()) {
-                setError("Please enter an API key name");
+              if (!newApiKeyName.trim()) {
+                setError("请先输入 API Key 名称。");
                 return;
               }
 
               void api.security
                 .createApiKey({
-                  name: newApiKeyDraft.name.trim(),
-                  allowedProviderIds: newApiKeyDraft.allowedProviderIds,
-                  allowedModelAliasIds: newApiKeyDraft.allowedModelAliasIds
+                  name: newApiKeyName.trim()
                 })
                 .then(async (response) => {
-                  setNewApiKeyDraft(defaultApiKeyDraft);
+                  setNewApiKeyName("");
                   setCreatedApiKeyPlaintext(response.createdKeyPlaintext);
                   await Promise.all([refreshApiKeys(), refreshSystem()]);
-                  handleNotice(`API key ${response.item.name} created`);
+                  handleNotice(`API Key ${response.item.name} 已创建。`);
                 })
                 .catch(handleError);
             }}
             onSaveApiKey={(apiKeyId) => {
               const draft = apiKeyDrafts[apiKeyId];
               if (!draft) {
-                setError("No pending API key changes found");
+                setError("未找到待保存的 API Key 草稿。");
                 return;
               }
 
@@ -508,22 +525,14 @@ export default function App() {
                 .updateApiKey(apiKeyId, draft)
                 .then(async (response) => {
                   await Promise.all([refreshApiKeys(), refreshSystem()]);
-                  handleNotice(`API key ${response.item.name} updated`);
+                  handleNotice(`API Key ${response.item.name} 已更新。`);
                 })
                 .catch(handleError);
             }}
             onDeleteApiKey={(apiKeyId) => {
               const current = apiKeys.find((item) => item.id === apiKeyId);
               if (!current) {
-                setError("API key not found");
-                return;
-              }
-
-              if (
-                !window.confirm(
-                  `Delete API key "${current.name}" now? It will stop working immediately.`
-                )
-              ) {
+                setError("API Key 不存在。");
                 return;
               }
 
@@ -531,7 +540,7 @@ export default function App() {
                 .deleteApiKey(apiKeyId)
                 .then(async () => {
                   await Promise.all([refreshApiKeys(), refreshSystem(), refreshAudit(1)]);
-                  handleNotice(`API key ${current.name} deleted`);
+                  handleNotice(`API Key ${current.name} 已删除。`);
                 })
                 .catch(handleError);
             }}

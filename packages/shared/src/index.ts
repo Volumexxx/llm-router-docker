@@ -33,7 +33,7 @@ export const providerCreateSchema = z.object({
   baseUrl: z.string().url(),
   apiKey: z.string().min(1).max(512),
   enabled: z.boolean().default(true),
-  testTimeoutMs: z.number().int().min(1000).max(120000).default(10000)
+  testTimeoutMs: z.number().int().min(1000).max(600000).default(10000)
 });
 
 export const providerUpdateSchema = z.object({
@@ -41,7 +41,7 @@ export const providerUpdateSchema = z.object({
   baseUrl: z.string().url().optional(),
   apiKey: z.string().min(1).max(512).optional(),
   enabled: z.boolean().optional(),
-  testTimeoutMs: z.number().int().min(1000).max(120000).optional()
+  testTimeoutMs: z.number().int().min(1000).max(600000).optional()
 });
 
 export const modelAliasCreateSchema = z.object({

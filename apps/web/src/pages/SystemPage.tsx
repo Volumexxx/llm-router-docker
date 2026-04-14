@@ -1,5 +1,6 @@
-import type { Dispatch, SetStateAction } from "react";
+import { useEffect, useMemo, useState, type Dispatch, type SetStateAction } from "react";
 
+import { Drawer } from "../components/Drawer.tsx";
 import type { ApiKeyItem, ModelItem, ProviderItem, SystemStatus } from "../lib/api.ts";
 import { formatDateTime, formatNumber } from "../lib/format.ts";
 
@@ -17,8 +18,8 @@ interface SystemPageProps {
   apiKeys: ApiKeyItem[];
   apiKeyDrafts: Record<string, ApiKeyDraft>;
   setApiKeyDrafts: Dispatch<SetStateAction<Record<string, ApiKeyDraft>>>;
-  newApiKeyDraft: ApiKeyDraft;
-  setNewApiKeyDraft: Dispatch<SetStateAction<ApiKeyDraft>>;
+  newApiKeyName: string;
+  setNewApiKeyName: Dispatch<SetStateAction<string>>;
   createdApiKeyPlaintext: string | null;
   onCreateApiKey: () => void;
   onSaveApiKey: (apiKeyId: string) => void;
@@ -42,7 +43,7 @@ function summarizeScope(
     .map((id) => items.find((item) => item.id === id)?.label)
     .filter((label): label is string => Boolean(label));
 
-  return labels.length > 0 ? labels.join(", ") : emptyLabel;
+  return labels.length > 0 ? labels.join("、") : emptyLabel;
 }
 
 function ScopeEditor({
@@ -59,13 +60,16 @@ function ScopeEditor({
   onToggle: (id: string) => void;
 }) {
   return (
-    <div className="scope-box">
+    <div className="scope-card">
       <div className="panel-head">
         <h4>{title}</h4>
-        <span className="pill">{selectedIds.length === 0 ? emptyLabel : `${selectedIds.length} selected`}</span>
+        <span className="pill">
+          {selectedIds.length === 0 ? emptyLabel : `已选 ${selectedIds.length} 项`}
+        </span>
       </div>
+
       {items.length === 0 ? (
-        <p className="muted">No selectable items yet.</p>
+        <p className="muted">当前还没有可选项目。</p>
       ) : (
         <div className="checkbox-list">
           {items.map((item) => (
@@ -83,7 +87,8 @@ function ScopeEditor({
           ))}
         </div>
       )}
-      <p className="muted">Leave everything unchecked to allow all.</p>
+
+      <p className="muted">全部不勾选表示该维度不受限。</p>
     </div>
   );
 }
@@ -95,73 +100,115 @@ export function SystemPage({
   apiKeys,
   apiKeyDrafts,
   setApiKeyDrafts,
-  newApiKeyDraft,
-  setNewApiKeyDraft,
+  newApiKeyName,
+  setNewApiKeyName,
   createdApiKeyPlaintext,
   onCreateApiKey,
   onSaveApiKey,
   onDeleteApiKey
 }: SystemPageProps) {
+  const [selectedApiKeyId, setSelectedApiKeyId] = useState<string | null>(null);
+  const [copyFeedback, setCopyFeedback] = useState<string | null>(null);
+
+  const providerOptions = useMemo(
+    () =>
+      providers.map((provider) => ({
+        id: provider.id,
+        label: provider.name,
+        hint: provider.baseUrl
+      })),
+    [providers]
+  );
+
+  const modelOptions = useMemo(
+    () =>
+      models.map((model) => ({
+        id: model.id,
+        label: model.alias,
+        hint: model.displayName
+      })),
+    [models]
+  );
+
+  const selectedApiKey = useMemo(
+    () => apiKeys.find((item) => item.id === selectedApiKeyId) ?? null,
+    [apiKeys, selectedApiKeyId]
+  );
+
+  useEffect(() => {
+    if (selectedApiKeyId && !selectedApiKey) {
+      setSelectedApiKeyId(null);
+    }
+  }, [selectedApiKey, selectedApiKeyId]);
+
+  useEffect(() => {
+    setCopyFeedback(null);
+  }, [createdApiKeyPlaintext]);
+
   if (!systemStatus) {
     return null;
   }
 
-  const providerOptions = providers.map((provider) => ({
-    id: provider.id,
-    label: provider.name,
-    hint: provider.baseUrl
-  }));
-  const modelOptions = models.map((model) => ({
-    id: model.id,
-    label: model.alias,
-    hint: model.displayName
-  }));
+  const selectedDraft = selectedApiKey
+    ? (apiKeyDrafts[selectedApiKey.id] ?? {
+        name: selectedApiKey.name,
+        enabled: selectedApiKey.enabled,
+        allowedProviderIds: selectedApiKey.allowedProviderIds,
+        allowedModelAliasIds: selectedApiKey.allowedModelAliasIds
+      })
+    : null;
 
   return (
     <div className="stack">
-      <section className="metric-grid">
-        <article className="panel">
-          <span>Service</span>
-          <strong>{systemStatus.ready ? "Ready" : "Not Ready"}</strong>
-        </article>
-        <article className="panel">
-          <span>Trusted Proxy</span>
-          <strong>{systemStatus.trustProxy ? "Enabled" : "Disabled"}</strong>
-        </article>
-        <article className="panel">
-          <span>Active API Keys</span>
-          <strong>
-            {formatNumber(systemStatus.activeApiKeyCount)} / {formatNumber(systemStatus.totalApiKeyCount)}
-          </strong>
-        </article>
-        <article className="panel">
-          <span>Max Active Proxies</span>
-          <strong>{systemStatus.maxActiveProxyRequests}</strong>
-        </article>
-      </section>
-
-      <section className="panel">
+      <section className="panel hero-panel">
         <div className="panel-head">
-          <h3>System Status</h3>
+          <div className="stack compact-stack">
+            <p className="eyebrow">System Telemetry</p>
+            <h3>系统状态</h3>
+            <p className="muted">部署健康、代理模式和 API Key 配置状态一屏查看。</p>
+          </div>
         </div>
+
+        <div className="metric-grid">
+          <article className="stat-card">
+            <span>服务状态</span>
+            <strong>{systemStatus.ready ? "Ready" : "Not Ready"}</strong>
+          </article>
+          <article className="stat-card">
+            <span>Trusted Proxy</span>
+            <strong>{systemStatus.trustProxy ? "已启用" : "未启用"}</strong>
+          </article>
+          <article className="stat-card">
+            <span>活跃 API Keys</span>
+            <strong>
+              {formatNumber(systemStatus.activeApiKeyCount)} / {formatNumber(systemStatus.totalApiKeyCount)}
+            </strong>
+          </article>
+          <article className="stat-card">
+            <span>最大并发代理</span>
+            <strong>{formatNumber(systemStatus.maxActiveProxyRequests)}</strong>
+          </article>
+        </div>
+
         <div className="detail-grid">
           <div>
-            <span>Recommended API Base</span>
+            <span>推荐 API 地址</span>
             <strong>{systemStatus.recommendedApiBaseUrl}</strong>
           </div>
           <div>
-            <span>Recommended Admin URL</span>
+            <span>推荐后台地址</span>
             <strong>{systemStatus.recommendedAdminUrl}</strong>
           </div>
           <div>
-            <span>Data Directory</span>
+            <span>数据目录</span>
             <strong>{systemStatus.dataDir}</strong>
           </div>
           <div>
-            <span>Database</span>
+            <span>数据库文件</span>
             <strong>{systemStatus.dbPath}</strong>
           </div>
         </div>
+
         {systemStatus.warnings.length > 0 ? (
           <div className="warning-list">
             {systemStatus.warnings.map((warning) => (
@@ -175,219 +222,276 @@ export function SystemPage({
 
       <section className="panel">
         <div className="panel-head">
-          <h3>Create API Key</h3>
-          <span className="muted">The plaintext is shown only once after creation.</span>
+          <div className="stack compact-stack">
+            <h3>创建 API Key</h3>
+            <p className="muted">
+              创建时仅需命名。Provider / Model 权限请在详情抽屉中按需配置。
+            </p>
+          </div>
         </div>
 
         <div className="form-grid">
           <label>
-            <span>Name</span>
+            <span>名称</span>
             <input
-              value={newApiKeyDraft.name}
-              onChange={(event) =>
-                setNewApiKeyDraft((current) => ({ ...current, name: event.target.value }))
-              }
-              placeholder="For example: NAS Home / iPhone / OpenWebUI"
+              value={newApiKeyName}
+              onChange={(event) => setNewApiKeyName(event.target.value)}
+              placeholder="例如：NAS 家庭网关 / OpenWebUI / iPhone"
             />
           </label>
         </div>
 
-        <div className="scope-grid">
-          <ScopeEditor
-            title="Allowed Providers"
-            emptyLabel="All providers"
-            items={providerOptions}
-            selectedIds={newApiKeyDraft.allowedProviderIds}
-            onToggle={(providerId) =>
-              setNewApiKeyDraft((current) => ({
-                ...current,
-                allowedProviderIds: toggleId(current.allowedProviderIds, providerId)
-              }))
-            }
-          />
-
-          <ScopeEditor
-            title="Allowed Models"
-            emptyLabel="All models"
-            items={modelOptions}
-            selectedIds={newApiKeyDraft.allowedModelAliasIds}
-            onToggle={(modelId) =>
-              setNewApiKeyDraft((current) => ({
-                ...current,
-                allowedModelAliasIds: toggleId(current.allowedModelAliasIds, modelId)
-              }))
-            }
-          />
+        <div className="toolbar">
+          <button type="button" className="primary" onClick={onCreateApiKey}>
+            创建 API Key
+          </button>
         </div>
 
-        <p className="feedback warning">
-          Routing rule: bindings are filtered by this key's Provider/Model scopes first, then the
-          router picks the remaining binding with the smallest runtime priority.
-        </p>
-
-        <button type="button" className="primary" onClick={onCreateApiKey}>
-          Create API Key
-        </button>
-
         {createdApiKeyPlaintext ? (
-          <div className="feedback warning">
-            <strong>Save this key now.</strong>
-            <div>
-              <code>{createdApiKeyPlaintext}</code>
+          <div className="created-key-panel">
+            <div className="stack compact-stack">
+              <strong>新建成功，仅展示一次</strong>
+              <code className="secret-preview">{createdApiKeyPlaintext}</code>
+              <p className="muted">请立即复制保存，后续详情页无法再次查看旧明文。</p>
+            </div>
+
+            <div className="toolbar">
+              <button
+                type="button"
+                className="secondary"
+                onClick={async () => {
+                  try {
+                    await navigator.clipboard.writeText(createdApiKeyPlaintext);
+                    setCopyFeedback("已复制到剪贴板。");
+                  } catch {
+                    setCopyFeedback("当前环境不支持自动复制，请手动复制上方明文。");
+                  }
+                }}
+              >
+                复制明文
+              </button>
+              {copyFeedback ? <span className="muted">{copyFeedback}</span> : null}
             </div>
           </div>
         ) : null}
       </section>
 
-      <section className="stack">
+      <section className="panel">
         <div className="panel-head">
-          <h3>API Key Management</h3>
-          <span className="muted">
-            Edit name, enable state, Provider scope and Model scope. Leaving scopes empty means
-            unrestricted access on that dimension.
-          </span>
+          <div className="stack compact-stack">
+            <h3>API Key 列表</h3>
+            <p className="muted">摘要页只显示关键状态，详细权限配置在右侧抽屉中维护。</p>
+          </div>
+          <span className="pill">{apiKeys.length} 把 Key</span>
         </div>
 
-        {apiKeys.length === 0 ? (
-          <section className="panel">
-            <p className="muted">
-              No API key exists yet. Create the first key above before calling `/v1/*`.
-            </p>
-          </section>
-        ) : (
-          apiKeys.map((apiKey) => {
-            const draft = apiKeyDrafts[apiKey.id] ?? {
-              name: apiKey.name,
-              enabled: apiKey.enabled,
-              allowedProviderIds: apiKey.allowedProviderIds,
-              allowedModelAliasIds: apiKey.allowedModelAliasIds
-            };
-
-            return (
-              <section key={apiKey.id} className="panel">
-                <div className="panel-head">
-                  <div>
-                    <h3>{apiKey.name}</h3>
-                    <p className="muted">
-                      {apiKey.maskedPreview} · created {formatDateTime(apiKey.createdAt)}
-                    </p>
-                  </div>
-                  <span className="pill">{apiKey.enabled ? "Enabled" : "Disabled"}</span>
-                </div>
-
-                <div className="form-grid">
-                  <label>
-                    <span>Name</span>
-                    <input
-                      value={draft.name}
-                      onChange={(event) =>
-                        setApiKeyDrafts((current) => ({
-                          ...current,
-                          [apiKey.id]: {
-                            ...draft,
-                            name: event.target.value
-                          }
-                        }))
-                      }
-                    />
-                  </label>
-
-                  <label className="inline-toggle">
-                    <span>Enabled</span>
-                    <input
-                      type="checkbox"
-                      checked={draft.enabled}
-                      onChange={(event) =>
-                        setApiKeyDrafts((current) => ({
-                          ...current,
-                          [apiKey.id]: {
-                            ...draft,
-                            enabled: event.target.checked
-                          }
-                        }))
-                      }
-                    />
-                  </label>
-                </div>
-
-                <div className="detail-grid">
-                  <div>
-                    <span>Last Used</span>
-                    <strong>{apiKey.lastUsedAt ? formatDateTime(apiKey.lastUsedAt) : "-"}</strong>
-                  </div>
-                  <div>
-                    <span>Provider Scope</span>
-                    <strong>
-                      {summarizeScope(
-                        draft.allowedProviderIds,
-                        providerOptions,
-                        "All providers"
-                      )}
-                    </strong>
-                  </div>
-                  <div>
-                    <span>Model Scope</span>
-                    <strong>
-                      {summarizeScope(draft.allowedModelAliasIds, modelOptions, "All models")}
-                    </strong>
-                  </div>
-                </div>
-
-                <div className="scope-grid">
-                  <ScopeEditor
-                    title="Allowed Providers"
-                    emptyLabel="All providers"
-                    items={providerOptions}
-                    selectedIds={draft.allowedProviderIds}
-                    onToggle={(providerId) =>
-                      setApiKeyDrafts((current) => ({
-                        ...current,
-                        [apiKey.id]: {
-                          ...draft,
-                          allowedProviderIds: toggleId(draft.allowedProviderIds, providerId)
-                        }
-                      }))
-                    }
-                  />
-
-                  <ScopeEditor
-                    title="Allowed Models"
-                    emptyLabel="All models"
-                    items={modelOptions}
-                    selectedIds={draft.allowedModelAliasIds}
-                    onToggle={(modelId) =>
-                      setApiKeyDrafts((current) => ({
-                        ...current,
-                        [apiKey.id]: {
-                          ...draft,
-                          allowedModelAliasIds: toggleId(draft.allowedModelAliasIds, modelId)
-                        }
-                      }))
-                    }
-                  />
-                </div>
-
-                <div className="toolbar">
-                  <button
-                    type="button"
-                    className="secondary"
-                    onClick={() => onSaveApiKey(apiKey.id)}
-                  >
-                    Save
-                  </button>
-                  <button
-                    type="button"
-                    className="secondary danger"
-                    onClick={() => onDeleteApiKey(apiKey.id)}
-                  >
-                    Delete
-                  </button>
-                </div>
-              </section>
-            );
-          })
-        )}
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>名称</th>
+                <th>掩码预览</th>
+                <th>状态</th>
+                <th>最近使用</th>
+                <th>Provider 范围</th>
+                <th>Model 范围</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              {apiKeys.length === 0 ? (
+                <tr>
+                  <td colSpan={7}>
+                    <div className="table-empty">还没有可用的 API Key，先在上方创建第一把。</div>
+                  </td>
+                </tr>
+              ) : (
+                apiKeys.map((apiKey) => (
+                  <tr key={apiKey.id}>
+                    <td>{apiKey.name}</td>
+                    <td>
+                      <code>{apiKey.maskedPreview}</code>
+                    </td>
+                    <td>
+                      <span className={apiKey.enabled ? "status-pill online" : "status-pill offline"}>
+                        {apiKey.enabled ? "启用中" : "已停用"}
+                      </span>
+                    </td>
+                    <td>{apiKey.lastUsedAt ? formatDateTime(apiKey.lastUsedAt) : "-"}</td>
+                    <td>
+                      {summarizeScope(apiKey.allowedProviderIds, providerOptions, "全部 Provider")}
+                    </td>
+                    <td>{summarizeScope(apiKey.allowedModelAliasIds, modelOptions, "全部模型")}</td>
+                    <td>
+                      <button
+                        type="button"
+                        className="secondary"
+                        onClick={() => setSelectedApiKeyId(apiKey.id)}
+                      >
+                        配置
+                      </button>
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
       </section>
+
+      <Drawer
+        open={Boolean(selectedApiKey)}
+        title={selectedApiKey ? `API Key 配置 · ${selectedApiKey.name}` : ""}
+        subtitle={
+          selectedApiKey
+            ? "先按 API Key 权限过滤候选绑定，再在剩余 binding 内按 runtime priority 选择最优路由。"
+            : undefined
+        }
+        onClose={() => setSelectedApiKeyId(null)}
+      >
+        {selectedApiKey && selectedDraft ? (
+          <div className="stack">
+            <section className="panel panel-elevated">
+              <div className="panel-head">
+                <div className="stack compact-stack">
+                  <h4>基本信息</h4>
+                  <p className="muted">旧 Key 明文不可回看，当前仅展示掩码预览与使用状态。</p>
+                </div>
+                <span className="pill">{selectedApiKey.maskedPreview}</span>
+              </div>
+
+              <div className="form-grid">
+                <label>
+                  <span>名称</span>
+                  <input
+                    value={selectedDraft.name}
+                    onChange={(event) =>
+                      setApiKeyDrafts((current) => ({
+                        ...current,
+                        [selectedApiKey.id]: {
+                          ...selectedDraft,
+                          name: event.target.value
+                        }
+                      }))
+                    }
+                  />
+                </label>
+
+                <label className="inline-toggle">
+                  <span>启用状态</span>
+                  <input
+                    type="checkbox"
+                    checked={selectedDraft.enabled}
+                    onChange={(event) =>
+                      setApiKeyDrafts((current) => ({
+                        ...current,
+                        [selectedApiKey.id]: {
+                          ...selectedDraft,
+                          enabled: event.target.checked
+                        }
+                      }))
+                    }
+                  />
+                </label>
+              </div>
+
+              <div className="detail-grid">
+                <div>
+                  <span>创建时间</span>
+                  <strong>{formatDateTime(selectedApiKey.createdAt)}</strong>
+                </div>
+                <div>
+                  <span>最近使用</span>
+                  <strong>
+                    {selectedApiKey.lastUsedAt ? formatDateTime(selectedApiKey.lastUsedAt) : "-"}
+                  </strong>
+                </div>
+                <div>
+                  <span>Provider 范围</span>
+                  <strong>
+                    {summarizeScope(selectedDraft.allowedProviderIds, providerOptions, "全部 Provider")}
+                  </strong>
+                </div>
+                <div>
+                  <span>Model 范围</span>
+                  <strong>
+                    {summarizeScope(selectedDraft.allowedModelAliasIds, modelOptions, "全部模型")}
+                  </strong>
+                </div>
+              </div>
+            </section>
+
+            <section className="panel panel-elevated">
+              <div className="panel-head">
+                <div className="stack compact-stack">
+                  <h4>权限范围</h4>
+                  <p className="muted">
+                    不勾选表示该维度放开。最终可路由目标 = Provider 白名单与模型白名单的交集。
+                  </p>
+                </div>
+              </div>
+
+              <div className="scope-grid">
+                <ScopeEditor
+                  title="Allowed Providers"
+                  emptyLabel="全部 Provider"
+                  items={providerOptions}
+                  selectedIds={selectedDraft.allowedProviderIds}
+                  onToggle={(providerId) =>
+                    setApiKeyDrafts((current) => ({
+                      ...current,
+                      [selectedApiKey.id]: {
+                        ...selectedDraft,
+                        allowedProviderIds: toggleId(selectedDraft.allowedProviderIds, providerId)
+                      }
+                    }))
+                  }
+                />
+
+                <ScopeEditor
+                  title="Allowed Models"
+                  emptyLabel="全部模型"
+                  items={modelOptions}
+                  selectedIds={selectedDraft.allowedModelAliasIds}
+                  onToggle={(modelId) =>
+                    setApiKeyDrafts((current) => ({
+                      ...current,
+                      [selectedApiKey.id]: {
+                        ...selectedDraft,
+                        allowedModelAliasIds: toggleId(selectedDraft.allowedModelAliasIds, modelId)
+                      }
+                    }))
+                  }
+                />
+              </div>
+
+              <div className="toolbar">
+                <button
+                  type="button"
+                  className="primary"
+                  onClick={() => onSaveApiKey(selectedApiKey.id)}
+                >
+                  保存配置
+                </button>
+                <button
+                  type="button"
+                  className="ghost danger"
+                  onClick={() => {
+                    if (!window.confirm(`确认删除 API Key “${selectedApiKey.name}” 吗？`)) {
+                      return;
+                    }
+
+                    onDeleteApiKey(selectedApiKey.id);
+                    setSelectedApiKeyId(null);
+                  }}
+                >
+                  删除 Key
+                </button>
+              </div>
+            </section>
+          </div>
+        ) : null}
+      </Drawer>
     </div>
   );
 }

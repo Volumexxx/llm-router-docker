@@ -1,7 +1,7 @@
 import type { Dispatch, SetStateAction } from "react";
 
 import type { ApiKeyItem, AuditResponse, ProviderItem } from "../lib/api.ts";
-import { formatCost, formatDateTime, formatNumber } from "../lib/format.ts";
+import { formatCost, formatDateTime, formatDuration, formatNumber } from "../lib/format.ts";
 
 interface AuditPageProps {
   providers: ProviderItem[];
@@ -42,7 +42,7 @@ interface AuditPageProps {
 
 function formatApiKeyLabel(apiKey: ApiKeyItem): string {
   const base = `${apiKey.name} (${apiKey.maskedPreview})`;
-  return apiKey.deletedAt ? `${base} [deleted]` : base;
+  return apiKey.deletedAt ? `${base} [已删除]` : base;
 }
 
 function formatAuditApiKey(item: AuditResponse["items"][number]): string {
@@ -55,11 +55,11 @@ function formatAuditApiKey(item: AuditResponse["items"][number]): string {
 
 function formatTokenBreakdown(item: AuditResponse["items"][number]): string {
   return [
-    `In ${formatNumber(item.input_tokens)}`,
-    `Out ${formatNumber(item.output_tokens)}`,
-    `Cache ${formatNumber(item.cached_input_tokens)}`,
-    `Total ${formatNumber(item.total_tokens)}`,
-    `Cost ${formatCost(item.estimated_cost)}`
+    `输入 ${formatNumber(item.input_tokens)}`,
+    `输出 ${formatNumber(item.output_tokens)}`,
+    `缓存 ${formatNumber(item.cached_input_tokens)}`,
+    `总量 ${formatNumber(item.total_tokens)}`,
+    `成本 ${formatCost(item.estimated_cost)}`
   ].join(" / ");
 }
 
@@ -77,7 +77,10 @@ export function AuditPage({
     <div className="stack">
       <section className="panel">
         <div className="panel-head">
-          <h3>Filters</h3>
+          <div className="stack compact-stack">
+            <h3>审计筛选</h3>
+            <p className="muted">按 Provider、API Key、模型别名、状态和接口类型快速检索。</p>
+          </div>
           <button
             type="button"
             className="secondary"
@@ -94,7 +97,7 @@ export function AuditPage({
               void refreshAudit(1, nextFilters).catch(onError);
             }}
           >
-            Clear
+            清空
           </button>
         </div>
 
@@ -107,7 +110,7 @@ export function AuditPage({
                 setAuditFilters((current) => ({ ...current, providerId: event.target.value }))
               }
             >
-              <option value="">All</option>
+              <option value="">全部</option>
               {providers.map((provider) => (
                 <option key={provider.id} value={provider.id}>
                   {provider.name}
@@ -124,7 +127,7 @@ export function AuditPage({
                 setAuditFilters((current) => ({ ...current, apiKeyId: event.target.value }))
               }
             >
-              <option value="">All</option>
+              <option value="">全部</option>
               {apiKeys.map((apiKey) => (
                 <option key={apiKey.id} value={apiKey.id}>
                   {formatApiKeyLabel(apiKey)}
@@ -134,15 +137,15 @@ export function AuditPage({
           </label>
 
           <label>
-            <span>Model Alias</span>
+            <span>模型别名</span>
             <input
               value={auditFilters.modelAlias}
-              list="model-aliases"
+              list="audit-model-aliases"
               onChange={(event) =>
                 setAuditFilters((current) => ({ ...current, modelAlias: event.target.value }))
               }
             />
-            <datalist id="model-aliases">
+            <datalist id="audit-model-aliases">
               {modelAliasOptions.map((alias) => (
                 <option key={alias} value={alias} />
               ))}
@@ -150,92 +153,105 @@ export function AuditPage({
           </label>
 
           <label>
-            <span>Status</span>
+            <span>状态</span>
             <select
               value={auditFilters.statusCategory}
               onChange={(event) =>
                 setAuditFilters((current) => ({ ...current, statusCategory: event.target.value }))
               }
             >
-              <option value="">All</option>
-              <option value="success">Success</option>
-              <option value="unauthorized">Unauthorized</option>
-              <option value="configuration_error">Configuration Error</option>
-              <option value="upstream_error">Upstream Error</option>
-              <option value="network_error">Network Error</option>
-              <option value="security_policy">Security Policy</option>
+              <option value="">全部</option>
+              <option value="success">成功</option>
+              <option value="unauthorized">未授权</option>
+              <option value="configuration_error">配置错误</option>
+              <option value="upstream_error">上游错误</option>
+              <option value="network_error">网络错误</option>
+              <option value="security_policy">安全策略</option>
             </select>
           </label>
 
           <label>
-            <span>Endpoint</span>
+            <span>接口类型</span>
             <select
               value={auditFilters.endpointType}
               onChange={(event) =>
                 setAuditFilters((current) => ({ ...current, endpointType: event.target.value }))
               }
             >
-              <option value="">All</option>
-              <option value="model_list">Model List</option>
+              <option value="">全部</option>
+              <option value="model_list">模型列表</option>
               <option value="chat_completions">Chat Completions</option>
               <option value="responses">Responses</option>
-              <option value="admin_login">Admin Login</option>
-              <option value="security">Security</option>
+              <option value="admin_login">后台登录</option>
+              <option value="security">安全事件</option>
             </select>
           </label>
         </div>
 
-        <button
-          type="button"
-          className="primary"
-          onClick={() => {
-            setAuditFilters((current) => ({ ...current, page: 1 }));
-            void refreshAudit(1, { page: 1 }).catch(onError);
-          }}
-        >
-          Search
-        </button>
+        <div className="toolbar">
+          <button
+            type="button"
+            className="primary"
+            onClick={() => {
+              setAuditFilters((current) => ({ ...current, page: 1 }));
+              void refreshAudit(1, { page: 1 }).catch(onError);
+            }}
+          >
+            查询审计
+          </button>
+        </div>
       </section>
 
       <section className="panel">
         <div className="panel-head">
-          <h3>Audit Results</h3>
-          <span className="pill">{audit?.pagination.total ?? 0} rows</span>
+          <div className="stack compact-stack">
+            <h3>审计结果</h3>
+            <p className="muted">默认按时间倒序，展示请求来源、状态、Token 和成本摘要。</p>
+          </div>
+          <span className="pill">{audit?.pagination.total ?? 0} 条记录</span>
         </div>
 
         <div className="table-wrap">
           <table>
             <thead>
               <tr>
-                <th>Time</th>
-                <th>Endpoint</th>
+                <th>时间</th>
+                <th>接口</th>
                 <th>Provider</th>
-                <th>Model</th>
+                <th>模型</th>
                 <th>API Key</th>
-                <th>Status</th>
+                <th>状态</th>
                 <th>HTTP</th>
-                <th>Latency</th>
-                <th>Tokens / Cost</th>
-                <th>Client IP</th>
-                <th>Summary</th>
+                <th>延迟</th>
+                <th>Tokens / 成本</th>
+                <th>来源 IP</th>
+                <th>摘要</th>
               </tr>
             </thead>
             <tbody>
-              {audit?.items.map((item) => (
-                <tr key={item.id}>
-                  <td>{formatDateTime(item.occurred_at)}</td>
-                  <td>{item.endpoint_type}</td>
-                  <td>{item.provider_name ?? "-"}</td>
-                  <td>{item.model_alias ?? item.upstream_model ?? "-"}</td>
-                  <td>{formatAuditApiKey(item)}</td>
-                  <td>{item.status_category}</td>
-                  <td>{item.http_status}</td>
-                  <td>{formatNumber(item.latency_ms)} ms</td>
-                  <td>{formatTokenBreakdown(item)}</td>
-                  <td>{item.client_ip ?? "-"}</td>
-                  <td>{item.error_summary ?? "-"}</td>
+              {audit?.items.length ? (
+                audit.items.map((item) => (
+                  <tr key={item.id}>
+                    <td>{formatDateTime(item.occurred_at)}</td>
+                    <td>{item.endpoint_type}</td>
+                    <td>{item.provider_name ?? "-"}</td>
+                    <td>{item.model_alias ?? item.upstream_model ?? "-"}</td>
+                    <td>{formatAuditApiKey(item)}</td>
+                    <td>{item.status_category}</td>
+                    <td>{item.http_status}</td>
+                    <td>{formatDuration(item.latency_ms)}</td>
+                    <td>{formatTokenBreakdown(item)}</td>
+                    <td>{item.client_ip ?? "-"}</td>
+                    <td>{item.error_summary ?? "-"}</td>
+                  </tr>
+                ))
+              ) : (
+                <tr>
+                  <td colSpan={11}>
+                    <div className="table-empty">当前筛选条件下没有审计记录。</div>
+                  </td>
                 </tr>
-              ))}
+              )}
             </tbody>
           </table>
         </div>
@@ -251,11 +267,11 @@ export function AuditPage({
               void refreshAudit(nextPage, { page: nextPage }).catch(onError);
             }}
           >
-            Previous
+            上一页
           </button>
 
           <span>
-            Page {audit?.pagination.page ?? 1} / {audit?.pagination.totalPages ?? 1}
+            第 {audit?.pagination.page ?? 1} / {audit?.pagination.totalPages ?? 1} 页
           </span>
 
           <button
@@ -268,7 +284,7 @@ export function AuditPage({
               void refreshAudit(nextPage, { page: nextPage }).catch(onError);
             }}
           >
-            Next
+            下一页
           </button>
         </div>
       </section>
