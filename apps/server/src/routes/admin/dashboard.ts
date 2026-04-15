@@ -12,7 +12,13 @@ export async function registerAdminDashboardRoutes(app: FastifyInstance): Promis
     async (request, reply) => {
       try {
         const range = dashboardRangeSchema.parse((request.query as { range?: string }).range ?? "day");
-        reply.send(buildDashboardSummary(request.server.appCtx.database.sqlite, range));
+        reply.send(
+          buildDashboardSummary(
+            request.server.appCtx.database.sqlite,
+            range,
+            request.server.appCtx.config.timezone
+          )
+        );
       } catch (error) {
         if (sendValidationError(reply, error)) {
           return;

@@ -8,6 +8,10 @@
     "dev:web": "pnpm --filter @llm-router/web dev",
     "build": "pnpm -r build",
     "docker:build": "docker build -t llm-router-docker:latest .",
+    "docker:up": "docker compose up -d --build",
+    "docker:down": "docker compose down",
+    "docker:logs": "docker compose logs -f",
+    "docker:restart": "docker compose restart",
     "docker:export": "docker save -o llm-router-docker-latest.tar llm-router-docker:latest",
     "test": "pnpm -r test",
     "typecheck": "pnpm -r typecheck"

@@ -1,6 +1,8 @@
 import type { FastifyReply, FastifyRequest } from "fastify";
 
 import { clampText } from "../lib/utils.ts";
+import type { GatewayResponseProtocol } from "../lib/http.ts";
+import { buildGatewayErrorPayload } from "../lib/http.ts";
 import { writeSecurityAuditFromRequest } from "../services/audit.ts";
 import { getClientIp, isIpAllowed } from "./ip.ts";
 import { loadSessionUserByToken } from "./session.ts";
@@ -98,6 +100,15 @@ export function requireGatewayBearerToken(request: FastifyRequest): string | nul
   return header.slice("Bearer ".length).trim();
 }
 
+export function requireGatewayApiKeyHeader(request: FastifyRequest): string | null {
+  const header = request.headers["x-api-key"];
+  if (typeof header !== "string") {
+    return null;
+  }
+
+  return header.trim() || null;
+}
+
 export function rejectGatewayRequest(
   request: FastifyRequest,
   reply: FastifyReply,
@@ -106,7 +117,8 @@ export function rejectGatewayRequest(
   message: string,
   options?: {
     statusCategory?: "unauthorized" | "configuration_error" | "security_policy";
-    endpointType?: "model_list" | "security";
+    endpointType?: "model_list" | "messages" | "security";
+    protocol?: GatewayResponseProtocol;
   }
 ): void {
   writeSecurityAuditFromRequest(request.server.appCtx.database.sqlite, request, {
@@ -121,10 +133,5 @@ export function rejectGatewayRequest(
     errorSummary: clampText(message, 500)
   });
 
-  reply.code(status).send({
-    error: {
-      code,
-      message
-    }
-  });
+  reply.code(status).send(buildGatewayErrorPayload(options?.protocol ?? "openai", code, message));
 }

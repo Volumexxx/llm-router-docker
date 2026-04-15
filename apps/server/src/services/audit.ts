@@ -216,7 +216,7 @@ export function queryInferenceAuditRows(
       `
         SELECT *
         FROM audit_logs
-        WHERE endpoint_type IN ('chat_completions', 'responses')
+        WHERE endpoint_type IN ('chat_completions', 'responses', 'messages')
           AND occurred_at >= ?
           AND occurred_at <= ?
         ORDER BY occurred_at ASC

@@ -47,6 +47,30 @@ describe("TrendChart", () => {
     expect(view.container.querySelectorAll(".trend-chart-point.is-selected")).toHaveLength(1);
   });
 
+  it("supports selecting a specific bucket by default", async () => {
+    const view = await render(
+      <TrendChart
+        series={[
+          {
+            label: "Requests",
+            color: "#42f5d7",
+            points: [
+              { label: "00:00", value: 3 },
+              { label: "01:00", value: 8 },
+              { label: "02:00", value: 13 }
+            ]
+          }
+        ]}
+        valueFormatter={(value) => `${value} req`}
+        defaultSelectedIndex={1}
+      />
+    );
+    activeRenders.push(view);
+
+    expect(view.container.textContent).toContain("01:00");
+    expect(view.container.textContent).toContain("8 req");
+  });
+
   it("shows all series values for the selected bucket in comparison mode", async () => {
     const view = await render(
       <TrendChart

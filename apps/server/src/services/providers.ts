@@ -3,6 +3,8 @@ import type { DatabaseSync } from "node:sqlite";
 import type { z } from "zod";
 
 import {
+  ANTHROPIC_API_VERSION,
+  providerProtocolSchema,
   providerCreateSchema,
   providerUpdateSchema
 } from "../../../../packages/shared/src/index.ts";
@@ -12,10 +14,14 @@ import { createId, nowIso } from "../lib/utils.ts";
 import { decryptSecret, encryptSecret } from "../security/crypto.ts";
 import { joinUrl } from "../lib/utils.ts";
 
+type ProviderProtocol = z.infer<typeof providerProtocolSchema>;
+
 export interface ProviderRecord {
   id: string;
   name: string;
   baseUrl: string;
+  protocol: ProviderProtocol;
+  apiVersion: string | null;
   enabled: boolean;
   testTimeoutMs: number;
   createdAt: string;
@@ -34,6 +40,8 @@ function sanitizeProviderRow(
         name: string;
         base_url: string;
         api_key_encrypted: string;
+        protocol: string;
+        api_version: string | null;
         enabled: number;
         test_timeout_ms: number;
         created_at: string;
@@ -47,11 +55,15 @@ function sanitizeProviderRow(
   }
 
   const apiKey = decryptSecret(row.api_key_encrypted, config.configEncryptionKey);
+  const protocol = normalizeProviderProtocol(row.protocol);
+  const apiVersion = normalizeProviderApiVersion(protocol, row.api_version);
 
   return {
     id: row.id,
     name: row.name,
     baseUrl: row.base_url,
+    protocol,
+    apiVersion,
     apiKey,
     enabled: Boolean(row.enabled),
     testTimeoutMs: row.test_timeout_ms,
@@ -75,6 +87,8 @@ export function listProviders(sqlite: DatabaseSync, config: RuntimeConfig): Prov
     name: string;
     base_url: string;
     api_key_encrypted: string;
+    protocol: string;
+    api_version: string | null;
     enabled: number;
     test_timeout_ms: number;
     created_at: string;
@@ -84,7 +98,7 @@ export function listProviders(sqlite: DatabaseSync, config: RuntimeConfig): Prov
   return rows
     .map((row) => sanitizeProviderRow(row, config))
     .filter((row): row is ProviderWithSecret => Boolean(row))
-    .map(({ apiKey, ...provider }) => provider);
+      .map(({ apiKey, ...provider }) => provider);
 }
 
 export function getProviderById(
@@ -100,6 +114,8 @@ export function getProviderById(
         name: string;
         base_url: string;
         api_key_encrypted: string;
+        protocol: string;
+        api_version: string | null;
         enabled: number;
         test_timeout_ms: number;
         created_at: string;
@@ -110,6 +126,21 @@ export function getProviderById(
   return sanitizeProviderRow(row, config);
 }
 
+function normalizeProviderProtocol(value: string | null | undefined): ProviderProtocol {
+  return value === "anthropic" ? "anthropic" : "openai";
+}
+
+function normalizeProviderApiVersion(
+  protocol: ProviderProtocol,
+  apiVersion: string | null | undefined
+): string | null {
+  if (protocol !== "anthropic") {
+    return null;
+  }
+
+  return apiVersion?.trim() || ANTHROPIC_API_VERSION;
+}
+
 export function createProvider(
   sqlite: DatabaseSync,
   config: RuntimeConfig,
@@ -117,6 +148,8 @@ export function createProvider(
 ): ProviderRecord {
   const id = createId();
   const timestamp = nowIso();
+  const protocol = normalizeProviderProtocol(input.protocol);
+  const apiVersion = normalizeProviderApiVersion(protocol, input.apiVersion);
 
   sqlite
     .prepare(
@@ -126,12 +159,14 @@ export function createProvider(
           name,
           base_url,
           api_key_encrypted,
+          protocol,
+          api_version,
           enabled,
           test_timeout_ms,
           created_at,
           updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `
     )
     .run(
@@ -139,6 +174,8 @@ export function createProvider(
       input.name,
       normalizeUrl(input.baseUrl),
       encryptSecret(input.apiKey, config.configEncryptionKey),
+      protocol,
+      apiVersion,
       input.enabled ? 1 : 0,
       input.testTimeoutMs,
       timestamp,
@@ -165,10 +202,18 @@ export function updateProvider(
     return null;
   }
 
+  const protocol = normalizeProviderProtocol(input.protocol ?? current.protocol);
+  const apiVersion = normalizeProviderApiVersion(
+    protocol,
+    input.apiVersion === undefined ? current.apiVersion : input.apiVersion
+  );
+
   const next = {
     name: input.name ?? current.name,
     baseUrl: normalizeUrl(input.baseUrl ?? current.baseUrl),
     apiKey: input.apiKey ?? current.apiKey,
+    protocol,
+    apiVersion,
     enabled: input.enabled ?? current.enabled,
     testTimeoutMs: input.testTimeoutMs ?? current.testTimeoutMs
   };
@@ -181,6 +226,8 @@ export function updateProvider(
           name = ?,
           base_url = ?,
           api_key_encrypted = ?,
+          protocol = ?,
+          api_version = ?,
           enabled = ?,
           test_timeout_ms = ?,
           updated_at = ?
@@ -191,6 +238,8 @@ export function updateProvider(
       next.name,
       next.baseUrl,
       encryptSecret(next.apiKey, config.configEncryptionKey),
+      next.protocol,
+      next.apiVersion,
       next.enabled ? 1 : 0,
       next.testTimeoutMs,
       nowIso(),

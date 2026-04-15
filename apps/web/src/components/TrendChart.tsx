@@ -12,6 +12,7 @@ interface TrendChartSeries {
 interface TrendChartProps {
   series: TrendChartSeries[];
   valueFormatter: (value: number) => string;
+  defaultSelectedIndex?: number;
 }
 
 const CHART_WIDTH = 920;
@@ -52,7 +53,7 @@ function pickTickIndices(length: number, maxTicks: number): number[] {
   return Array.from(indices).sort((left, right) => left - right);
 }
 
-export function TrendChart({ series, valueFormatter }: TrendChartProps) {
+export function TrendChart({ series, valueFormatter, defaultSelectedIndex }: TrendChartProps) {
   const normalizedSeries = useMemo(
     () => series.filter((item) => item.points.length > 0),
     [series]
@@ -68,8 +69,13 @@ export function TrendChart({ series, valueFormatter }: TrendChartProps) {
   );
 
   useEffect(() => {
-    setSelectedIndex(Math.max((normalizedSeries[0]?.points.length ?? 1) - 1, 0));
-  }, [selectionFingerprint, normalizedSeries]);
+    const maxIndex = Math.max((normalizedSeries[0]?.points.length ?? 1) - 1, 0);
+    const nextIndex =
+      typeof defaultSelectedIndex === "number"
+        ? Math.min(Math.max(defaultSelectedIndex, 0), maxIndex)
+        : maxIndex;
+    setSelectedIndex(nextIndex);
+  }, [defaultSelectedIndex, selectionFingerprint, normalizedSeries]);
 
   if (normalizedSeries.length === 0) {
     return <div className="chart-empty">当前没有可展示的趋势数据。</div>;

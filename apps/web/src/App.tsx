@@ -9,6 +9,7 @@ import {
   type BindingPayload,
   type DashboardSummary,
   type ModelItem,
+  type ProviderPayload,
   type ProviderItem,
   type SystemStatus
 } from "./lib/api.ts";
@@ -39,10 +40,12 @@ type ApiKeyDraft = {
   allowedModelAliasIds: string[];
 };
 
-const defaultProviderForm = {
+const defaultProviderForm: ProviderPayload = {
   name: "",
   baseUrl: "",
   apiKey: "",
+  protocol: "openai",
+  apiVersion: null,
   enabled: true,
   testTimeoutMs: 10000
 };
@@ -268,7 +271,7 @@ export default function App() {
   const updateProviderField = (
     providerId: string,
     field: keyof ProviderItem,
-    value: string | boolean | number
+    value: string | boolean | number | null
   ) => {
     setProviders((current) =>
       current.map((provider) =>

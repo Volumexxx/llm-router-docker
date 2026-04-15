@@ -7,6 +7,8 @@ export const providers = sqliteTable(
     name: text("name").notNull(),
     baseUrl: text("base_url").notNull(),
     apiKeyEncrypted: text("api_key_encrypted").notNull(),
+    protocol: text("protocol").notNull().default("openai"),
+    apiVersion: text("api_version"),
     enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
     testTimeoutMs: integer("test_timeout_ms").notNull().default(10000),
     createdAt: text("created_at").notNull(),

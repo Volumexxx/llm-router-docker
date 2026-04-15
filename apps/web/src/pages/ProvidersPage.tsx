@@ -11,11 +11,15 @@ interface ProvidersPageProps {
   updateProviderField: (
     providerId: string,
     field: keyof ProviderItem,
-    value: string | boolean | number
+    value: string | boolean | number | null
   ) => void;
   refreshProviders: () => Promise<void>;
   onNotice: (message: string) => void;
   onError: (reason: unknown) => void;
+}
+
+function getCreatePlaceholder(protocol: ProviderPayload["protocol"]): string {
+  return protocol === "anthropic" ? "https://api.anthropic.com" : "https://api.openai.com/v1";
 }
 
 export function ProvidersPage({
@@ -36,7 +40,8 @@ export function ProvidersPage({
           <div className="stack compact-stack">
             <h3>新增 Provider</h3>
             <p className="muted">
-              当前仅支持 OpenAI 兼容上游。Provider 连接测试超时上限已放宽，适合高延迟公网环境。
+              支持 OpenAI 兼容上游和 Anthropic / Claude 协议上游。Anthropic 建议直接填写
+              `https://api.anthropic.com`，系统会自动补全所需路径。
             </p>
           </div>
         </div>
@@ -49,9 +54,30 @@ export function ProvidersPage({
               onChange={(event) =>
                 setNewProvider((current) => ({ ...current, name: event.target.value }))
               }
-              placeholder="例如：OpenAI / Azure / NAS Proxy"
+              placeholder="例如：OpenAI / Claude / NAS Proxy"
             />
           </label>
+
+          <label>
+            <span>协议类型</span>
+            <select
+              value={newProvider.protocol}
+              onChange={(event) =>
+                setNewProvider((current) => ({
+                  ...current,
+                  protocol: event.target.value as "openai" | "anthropic",
+                  apiVersion:
+                    event.target.value === "anthropic"
+                      ? current.apiVersion ?? "2023-06-01"
+                      : null
+                }))
+              }
+            >
+              <option value="openai">OpenAI Compatible</option>
+              <option value="anthropic">Anthropic / Claude</option>
+            </select>
+          </label>
+
           <label>
             <span>接口地址</span>
             <input
@@ -59,9 +85,10 @@ export function ProvidersPage({
               onChange={(event) =>
                 setNewProvider((current) => ({ ...current, baseUrl: event.target.value }))
               }
-              placeholder="https://api.openai.com/v1"
+              placeholder={getCreatePlaceholder(newProvider.protocol)}
             />
           </label>
+
           <label>
             <span>真实 API Key</span>
             <input
@@ -72,8 +99,22 @@ export function ProvidersPage({
               }
             />
           </label>
+
+          {newProvider.protocol === "anthropic" ? (
+            <label>
+              <span>Anthropic API Version</span>
+              <input
+                value={newProvider.apiVersion ?? "2023-06-01"}
+                onChange={(event) =>
+                  setNewProvider((current) => ({ ...current, apiVersion: event.target.value }))
+                }
+                placeholder="2023-06-01"
+              />
+            </label>
+          ) : null}
+
           <label>
-            <span>测试超时（ms）</span>
+            <span>测试超时(ms)</span>
             <input
               type="number"
               step="1000"
@@ -111,6 +152,8 @@ export function ProvidersPage({
                     name: "",
                     baseUrl: "",
                     apiKey: "",
+                    protocol: "openai",
+                    apiVersion: null,
                     enabled: true,
                     testTimeoutMs: 10000
                   });
@@ -129,7 +172,9 @@ export function ProvidersPage({
         <div className="panel-head">
           <div className="stack compact-stack">
             <h3>Provider 管理</h3>
-            <p className="muted">支持直接编辑配置、替换密钥以及在线连通性测试。</p>
+            <p className="muted">
+              支持直接编辑协议、地址、密钥与测试版本，并可在线验证连通性。
+            </p>
           </div>
           <span className="pill">{providers.length} 个 Provider</span>
         </div>
@@ -139,8 +184,10 @@ export function ProvidersPage({
             <thead>
               <tr>
                 <th>名称</th>
+                <th>协议</th>
                 <th>接口地址</th>
                 <th>Key 预览 / 替换</th>
+                <th>API Version</th>
                 <th>测试超时</th>
                 <th>启用</th>
                 <th>操作</th>
@@ -149,7 +196,7 @@ export function ProvidersPage({
             <tbody>
               {providers.length === 0 ? (
                 <tr>
-                  <td colSpan={6}>
+                  <td colSpan={8}>
                     <div className="table-empty">还没有 Provider，先在上方新增一个。</div>
                   </td>
                 </tr>
@@ -163,6 +210,21 @@ export function ProvidersPage({
                           updateProviderField(provider.id, "name", event.target.value)
                         }
                       />
+                    </td>
+                    <td>
+                      <select
+                        value={provider.protocol}
+                        onChange={(event) =>
+                          updateProviderField(
+                            provider.id,
+                            "protocol",
+                            event.target.value as "openai" | "anthropic"
+                          )
+                        }
+                      >
+                        <option value="openai">OpenAI</option>
+                        <option value="anthropic">Anthropic</option>
+                      </select>
                     </td>
                     <td>
                       <input
@@ -187,6 +249,18 @@ export function ProvidersPage({
                           }
                         />
                       </div>
+                    </td>
+                    <td>
+                      {provider.protocol === "anthropic" ? (
+                        <input
+                          value={provider.apiVersion ?? "2023-06-01"}
+                          onChange={(event) =>
+                            updateProviderField(provider.id, "apiVersion", event.target.value)
+                          }
+                        />
+                      ) : (
+                        <code>-</code>
+                      )}
                     </td>
                     <td>
                       <input
@@ -221,6 +295,11 @@ export function ProvidersPage({
                               .update(provider.id, {
                                 name: provider.name,
                                 baseUrl: provider.baseUrl,
+                                protocol: provider.protocol,
+                                apiVersion:
+                                  provider.protocol === "anthropic"
+                                    ? provider.apiVersion ?? "2023-06-01"
+                                    : null,
                                 enabled: provider.enabled,
                                 testTimeoutMs: provider.testTimeoutMs,
                                 ...(providerSecrets[provider.id]

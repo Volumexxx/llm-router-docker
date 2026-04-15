@@ -7,9 +7,12 @@ import {
   bindingCreateSchema,
   bindingUpdateSchema,
   modelAliasCreateSchema,
-  modelAliasUpdateSchema
+  modelAliasUpdateSchema,
+  providerProtocolSchema
 } from "../../../../packages/shared/src/index.ts";
 import { createId, nowIso } from "../lib/utils.ts";
+
+type ProviderProtocol = z.infer<typeof providerProtocolSchema>;
 
 export interface ModelBindingView {
   id: string;
@@ -40,6 +43,8 @@ export interface RoutableBinding {
   providerName: string;
   providerBaseUrl: string;
   providerApiKeyEncrypted: string;
+  providerProtocol: ProviderProtocol;
+  providerApiVersion: string | null;
   upstreamModel: string;
   inputPrice: number;
   outputPrice: number;
@@ -486,6 +491,8 @@ export function resolveRoutableBinding(
           providers.name AS provider_name,
           providers.base_url AS provider_base_url,
           providers.api_key_encrypted AS provider_api_key_encrypted,
+          providers.protocol AS provider_protocol,
+          providers.api_version AS provider_api_version,
           model_bindings.upstream_model AS upstream_model,
           model_bindings.input_price AS input_price,
           model_bindings.output_price AS output_price
@@ -508,6 +515,8 @@ export function resolveRoutableBinding(
     provider_name: string;
     provider_base_url: string;
     provider_api_key_encrypted: string;
+    provider_protocol: string;
+    provider_api_version: string | null;
     upstream_model: string;
     input_price: number;
     output_price: number;
@@ -537,6 +546,11 @@ export function resolveRoutableBinding(
       providerName: matchedRow.provider_name,
       providerBaseUrl: matchedRow.provider_base_url,
       providerApiKeyEncrypted: matchedRow.provider_api_key_encrypted,
+      providerProtocol: matchedRow.provider_protocol === "anthropic" ? "anthropic" : "openai",
+      providerApiVersion:
+        matchedRow.provider_protocol === "anthropic"
+          ? (matchedRow.provider_api_version ?? "2023-06-01")
+          : null,
       upstreamModel: matchedRow.upstream_model,
       inputPrice: Number(matchedRow.input_price),
       outputPrice: Number(matchedRow.output_price)

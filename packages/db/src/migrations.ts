@@ -175,5 +175,12 @@ export const migrations: SqlMigration[] = [
       CREATE INDEX IF NOT EXISTS idx_api_key_model_scopes_model_alias_id
       ON api_key_model_scopes(model_alias_id);
     `
+  },
+  {
+    version: "004_provider_protocols",
+    sql: `
+      ALTER TABLE providers ADD COLUMN protocol TEXT NOT NULL DEFAULT 'openai';
+      ALTER TABLE providers ADD COLUMN api_version TEXT;
+    `
   }
 ];

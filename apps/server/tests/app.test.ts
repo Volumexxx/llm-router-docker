@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { buildApp } from "../src/app.ts";
+import { buildDashboardSummary } from "../src/services/dashboard.ts";
 
 function createTempDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "llm-router-"));
@@ -41,6 +42,85 @@ async function createTestApp(fetchImpl?: typeof fetch, dataDir?: string) {
       BOOTSTRAP_ADMIN_PASSWORD: "admin-password"
     }
   });
+}
+
+function insertAuditRow(
+  app: Awaited<ReturnType<typeof buildApp>>,
+  input: {
+    occurredAt: string;
+    endpointType?: "chat_completions" | "responses" | "messages";
+    statusCategory?: "success" | "unauthorized" | "configuration_error" | "upstream_error" | "network_error" | "security_policy";
+    providerName?: string | null;
+    modelAlias?: string | null;
+    apiKeyId?: string | null;
+    apiKeyName?: string | null;
+    apiKeyMaskedPreview?: string | null;
+    inputTokens?: number | null;
+    cachedInputTokens?: number | null;
+    outputTokens?: number | null;
+    totalTokens?: number | null;
+    estimatedCost?: number | null;
+    latencyMs?: number;
+  }
+) {
+  app.appCtx.database.sqlite
+    .prepare(
+      `
+        INSERT INTO audit_logs (
+          id,
+          request_id,
+          occurred_at,
+          endpoint_type,
+          provider_id,
+          provider_name,
+          model_alias,
+          upstream_model,
+          api_key_id,
+          api_key_name,
+          api_key_masked_preview,
+          is_stream,
+          status_category,
+          http_status,
+          latency_ms,
+          input_tokens,
+          cached_input_tokens,
+          output_tokens,
+          total_tokens,
+          estimated_cost,
+          error_code,
+          error_summary,
+          client_ip,
+          user_agent
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `
+    )
+    .run(
+      crypto.randomUUID(),
+      crypto.randomUUID(),
+      input.occurredAt,
+      input.endpointType ?? "chat_completions",
+      null,
+      input.providerName ?? "test-provider",
+      input.modelAlias ?? "test-model",
+      input.modelAlias ?? "test-upstream",
+      input.apiKeyId ?? "test-api-key-id",
+      input.apiKeyName ?? "test-api-key",
+      input.apiKeyMaskedPreview ?? "lrk***123",
+      0,
+      input.statusCategory ?? "success",
+      200,
+      input.latencyMs ?? 100,
+      input.inputTokens ?? null,
+      input.cachedInputTokens ?? null,
+      input.outputTokens ?? null,
+      input.totalTokens ?? null,
+      input.estimatedCost ?? null,
+      null,
+      null,
+      "127.0.0.1",
+      "vitest"
+    );
 }
 
 async function login(app: Awaited<ReturnType<typeof buildApp>>) {
@@ -106,6 +186,8 @@ async function createProvider(
     name: string;
     baseUrl: string;
     apiKey?: string;
+    protocol?: "openai" | "anthropic";
+    apiVersion?: string | null;
     enabled?: boolean;
     testTimeoutMs?: number;
   }
@@ -118,6 +200,8 @@ async function createProvider(
     },
     payload: {
       apiKey: input.apiKey ?? "provider-secret",
+      protocol: input.protocol ?? "openai",
+      apiVersion: input.apiVersion,
       enabled: input.enabled ?? true,
       testTimeoutMs: input.testTimeoutMs ?? 10000,
       ...input
@@ -129,6 +213,8 @@ async function createProvider(
     id: string;
     name: string;
     baseUrl: string;
+    protocol: "openai" | "anthropic";
+    apiVersion: string | null;
   };
 }
 
@@ -223,6 +309,389 @@ async function createProviderAndModel(
 }
 
 describe("llm router server", () => {
+  it("stores provider protocol and api version", async () => {
+    const app = await createTestApp();
+
+    try {
+      const cookie = await login(app);
+      const response = await app.inject({
+        method: "POST",
+        url: "/admin/api/providers",
+        headers: {
+          cookie
+        },
+        payload: {
+          name: "claude-primary",
+          baseUrl: "https://api.anthropic.com",
+          apiKey: "anthropic-secret",
+          protocol: "anthropic",
+          apiVersion: "2023-06-01",
+          enabled: true,
+          testTimeoutMs: 12000
+        }
+      });
+
+      expect(response.statusCode).toBe(201);
+      expect(response.json().item.protocol).toBe("anthropic");
+      expect(response.json().item.apiVersion).toBe("2023-06-01");
+
+      const list = await app.inject({
+        method: "GET",
+        url: "/admin/api/providers",
+        headers: {
+          cookie
+        }
+      });
+
+      expect(list.statusCode).toBe(200);
+      expect(list.json().items[0].protocol).toBe("anthropic");
+      expect(list.json().items[0].apiVersion).toBe("2023-06-01");
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("accepts null apiVersion for openai-compatible providers", async () => {
+    const app = await createTestApp();
+
+    try {
+      const cookie = await login(app);
+      const response = await app.inject({
+        method: "POST",
+        url: "/admin/api/providers",
+        headers: {
+          cookie
+        },
+        payload: {
+          name: "openai-compatible",
+          baseUrl: "https://provider.example/v1",
+          apiKey: "provider-secret",
+          protocol: "openai",
+          apiVersion: null,
+          enabled: true,
+          testTimeoutMs: 10000
+        }
+      });
+
+      expect(response.statusCode).toBe(201);
+      expect(response.json().item.protocol).toBe("openai");
+      expect(response.json().item.apiVersion).toBeNull();
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("tests Anthropic providers with x-api-key and anthropic-version", async () => {
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      expect(String(input)).toBe("https://api.anthropic.com/v1/models");
+      const headers = new Headers(init?.headers);
+      expect(headers.get("x-api-key")).toBe("anthropic-secret");
+      expect(headers.get("anthropic-version")).toBe("2023-06-01");
+      expect(headers.get("authorization")).toBeNull();
+
+      return new Response(
+        JSON.stringify({
+          data: [{ id: "claude-sonnet-4-5" }]
+        }),
+        {
+          status: 200,
+          headers: {
+            "content-type": "application/json"
+          }
+        }
+      );
+    });
+
+    const app = await createTestApp(fetchImpl);
+
+    try {
+      const cookie = await login(app);
+      const provider = await createProvider(app, cookie, {
+        name: "claude-test",
+        baseUrl: "https://api.anthropic.com",
+        protocol: "anthropic",
+        apiVersion: "2023-06-01",
+        apiKey: "anthropic-secret"
+      });
+
+      const response = await app.inject({
+        method: "POST",
+        url: `/admin/api/providers/${provider.id}/test`,
+        headers: {
+          cookie
+        }
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json().success).toBe(true);
+      expect(response.json().visibleModelCount).toBe(1);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("returns Anthropic models payload when anthropic-version header is present", async () => {
+    const app = await createTestApp();
+
+    try {
+      const cookie = await login(app);
+      const provider = await createProvider(app, cookie, {
+        name: "claude-models",
+        baseUrl: "https://api.anthropic.com",
+        protocol: "anthropic",
+        apiVersion: "2023-06-01"
+      });
+      const model = await createModel(app, cookie, {
+        alias: "claude-sonnet",
+        displayName: "Claude Sonnet"
+      });
+
+      await addBinding(app, cookie, model.id, {
+        providerId: provider.id,
+        upstreamModel: "claude-sonnet-4-5"
+      });
+
+      const apiKey = await createGatewayApiKey(app, cookie, {
+        name: "anthropic-client"
+      });
+
+      const response = await app.inject({
+        method: "GET",
+        url: "/v1/models",
+        headers: {
+          "x-api-key": apiKey.plaintext,
+          "anthropic-version": "2023-06-01"
+        }
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json().data[0].type).toBe("model");
+      expect(response.json().data[0].id).toBe("claude-sonnet");
+      expect(response.json().has_more).toBe(false);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("proxies anthropic messages to anthropic providers", async () => {
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+
+      if (url.endsWith("/v1/messages")) {
+        const headers = new Headers(init?.headers);
+        const payload = JSON.parse(String(init?.body)) as {
+          model: string;
+          max_tokens: number;
+          messages: Array<{ role: string; content: Array<{ type: string; text: string }> }>;
+        };
+
+        expect(headers.get("x-api-key")).toBe("provider-secret");
+        expect(headers.get("anthropic-version")).toBe("2023-06-01");
+        expect(payload.model).toBe("claude-sonnet-4-5");
+        expect(payload.max_tokens).toBe(128);
+        expect(payload.messages[0].role).toBe("user");
+
+        return new Response(
+          JSON.stringify({
+            id: "msg_123",
+            type: "message",
+            role: "assistant",
+            model: "claude-sonnet-4-5",
+            content: [{ type: "text", text: "hello from claude" }],
+            stop_reason: "end_turn",
+            usage: {
+              input_tokens: 14,
+              output_tokens: 7
+            }
+          }),
+          {
+            status: 200,
+            headers: {
+              "content-type": "application/json"
+            }
+          }
+        );
+      }
+
+      return new Response(
+        JSON.stringify({
+          data: [{ id: "claude-sonnet-4-5" }]
+        }),
+        {
+          status: 200,
+          headers: {
+            "content-type": "application/json"
+          }
+        }
+      );
+    });
+
+    const app = await createTestApp(fetchImpl);
+
+    try {
+      const cookie = await login(app);
+      const provider = await createProvider(app, cookie, {
+        name: "claude-primary",
+        baseUrl: "https://api.anthropic.com",
+        protocol: "anthropic",
+        apiVersion: "2023-06-01"
+      });
+      const model = await createModel(app, cookie, {
+        alias: "claude-router",
+        displayName: "Claude Router"
+      });
+
+      await addBinding(app, cookie, model.id, {
+        providerId: provider.id,
+        upstreamModel: "claude-sonnet-4-5",
+        inputPrice: 3,
+        outputPrice: 15
+      });
+
+      const apiKey = await createGatewayApiKey(app, cookie, {
+        name: "claude-client"
+      });
+
+      const response = await app.inject({
+        method: "POST",
+        url: "/v1/messages",
+        headers: {
+          "x-api-key": apiKey.plaintext,
+          "anthropic-version": "2023-06-01"
+        },
+        payload: {
+          model: "claude-router",
+          max_tokens: 128,
+          messages: [{ role: "user", content: [{ type: "text", text: "hi" }] }]
+        }
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json().type).toBe("message");
+      expect(response.json().content[0].text).toBe("hello from claude");
+
+      const auditResponse = await app.inject({
+        method: "GET",
+        url: `/admin/api/audit?page=1&pageSize=20&apiKeyId=${apiKey.id}&endpointType=messages`,
+        headers: {
+          cookie
+        }
+      });
+
+      expect(auditResponse.statusCode).toBe(200);
+      const messageAudit = auditResponse
+        .json()
+        .items.find((item: { endpoint_type: string }) => item.endpoint_type === "messages");
+      expect(messageAudit).toBeTruthy();
+      expect(messageAudit.input_tokens).toBe(14);
+      expect(messageAudit.output_tokens).toBe(7);
+
+      const dashboard = await app.inject({
+        method: "GET",
+        url: "/admin/api/dashboard?range=day",
+        headers: {
+          cookie
+        }
+      });
+
+      expect(dashboard.statusCode).toBe(200);
+      expect(dashboard.json().overall.inputTokens).toBe(14);
+      expect(dashboard.json().overall.outputTokens).toBe(7);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("rejects anthropic requests without anthropic-version", async () => {
+    const app = await createTestApp();
+
+    try {
+      const cookie = await login(app);
+      const provider = await createProvider(app, cookie, {
+        name: "claude-version-check",
+        baseUrl: "https://api.anthropic.com",
+        protocol: "anthropic",
+        apiVersion: "2023-06-01"
+      });
+      const model = await createModel(app, cookie, {
+        alias: "claude-version-model",
+        displayName: "Claude Version Model"
+      });
+
+      await addBinding(app, cookie, model.id, {
+        providerId: provider.id,
+        upstreamModel: "claude-sonnet-4-5"
+      });
+
+      const apiKey = await createGatewayApiKey(app, cookie, {
+        name: "claude-version-client"
+      });
+
+      const response = await app.inject({
+        method: "POST",
+        url: "/v1/messages",
+        headers: {
+          "x-api-key": apiKey.plaintext
+        },
+        payload: {
+          model: "claude-version-model",
+          max_tokens: 64,
+          messages: [{ role: "user", content: [{ type: "text", text: "hi" }] }]
+        }
+      });
+
+      expect(response.statusCode).toBe(400);
+      expect(response.json().type).toBe("error");
+      expect(response.json().error.type).toBe("anthropic_version_required");
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("rejects responses endpoint for anthropic providers", async () => {
+    const app = await createTestApp();
+
+    try {
+      const cookie = await login(app);
+      const provider = await createProvider(app, cookie, {
+        name: "claude-responses",
+        baseUrl: "https://api.anthropic.com",
+        protocol: "anthropic",
+        apiVersion: "2023-06-01"
+      });
+      const model = await createModel(app, cookie, {
+        alias: "claude-responses-model",
+        displayName: "Claude Responses Model"
+      });
+
+      await addBinding(app, cookie, model.id, {
+        providerId: provider.id,
+        upstreamModel: "claude-sonnet-4-5"
+      });
+
+      const apiKey = await createGatewayApiKey(app, cookie, {
+        name: "responses-on-claude"
+      });
+
+      const response = await app.inject({
+        method: "POST",
+        url: "/v1/responses",
+        headers: {
+          authorization: `Bearer ${apiKey.plaintext}`
+        },
+        payload: {
+          model: "claude-responses-model",
+          input: "hello"
+        }
+      });
+
+      expect(response.statusCode).toBe(400);
+      expect(response.json().error.code).toBe("endpoint_not_supported_for_provider_protocol");
+    } finally {
+      await app.close();
+    }
+  });
+
   it("bootstraps and exposes health endpoints without bootstrap gateway key", async () => {
     const app = await createTestApp();
 
@@ -1117,6 +1586,155 @@ describe("llm router server", () => {
       expect(reloadedModel).toBeTruthy();
       expect(reloadedModel.bindings).toHaveLength(1);
       expect(reloadedModel.bindings[0].providerName).toBe("binding-provider-a");
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("builds day dashboard windows as the full local day in configured timezone", async () => {
+    const app = await createTestApp();
+
+    try {
+      const now = new Date("2026-04-15T03:22:03.000Z");
+
+      insertAuditRow(app, {
+        occurredAt: "2026-04-15T03:15:00.000Z",
+        inputTokens: 12,
+        outputTokens: 4,
+        totalTokens: 16
+      });
+      insertAuditRow(app, {
+        occurredAt: "2026-04-15T16:10:00.000Z",
+        inputTokens: 99,
+        outputTokens: 1,
+        totalTokens: 100
+      });
+
+      const summary = buildDashboardSummary(
+        app.appCtx.database.sqlite,
+        "day",
+        "Asia/Shanghai",
+        now
+      );
+
+      expect(summary.timezone).toBe("Asia/Shanghai");
+      expect(summary.windowStart).toBe("2026-04-14T16:00:00.000Z");
+      expect(summary.windowEnd).toBe("2026-04-15T15:59:59.999Z");
+      expect(summary.currentBucketIndex).toBe(11);
+      expect(summary.trend).toHaveLength(24);
+      expect(summary.trend[0]?.label).toBe("00:00");
+      expect(summary.trend[23]?.label).toBe("23:00");
+      expect(summary.overall.inputTokens).toBe(12);
+      expect(summary.overall.outputTokens).toBe(4);
+      expect(summary.overall.totalTokens).toBe(16);
+      expect(summary.trend[0]?.requests).toBe(0);
+      expect(summary.trend[11]?.requests).toBe(1);
+      expect(summary.trend[23]?.requests).toBe(0);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("builds week dashboard windows from Monday to Sunday with future buckets kept at zero", async () => {
+    const app = await createTestApp();
+
+    try {
+      const now = new Date("2026-04-15T03:22:03.000Z");
+
+      insertAuditRow(app, {
+        occurredAt: "2026-04-12T16:30:00.000Z",
+        inputTokens: 30,
+        outputTokens: 10,
+        totalTokens: 40
+      });
+      insertAuditRow(app, {
+        occurredAt: "2026-04-13T02:00:00.000Z",
+        inputTokens: 20,
+        outputTokens: 5,
+        totalTokens: 25
+      });
+      insertAuditRow(app, {
+        occurredAt: "2026-04-10T09:00:00.000Z",
+        inputTokens: 200,
+        outputTokens: 50,
+        totalTokens: 250
+      });
+
+      const summary = buildDashboardSummary(
+        app.appCtx.database.sqlite,
+        "week",
+        "Asia/Shanghai",
+        now
+      );
+
+      expect(summary.windowStart).toBe("2026-04-12T16:00:00.000Z");
+      expect(summary.windowEnd).toBe("2026-04-19T15:59:59.999Z");
+      expect(summary.currentBucketIndex).toBe(2);
+      expect(summary.trend).toHaveLength(7);
+      expect(summary.trend.map((point) => point.label)).toEqual([
+        "04-13",
+        "04-14",
+        "04-15",
+        "04-16",
+        "04-17",
+        "04-18",
+        "04-19"
+      ]);
+      expect(summary.overall.inputTokens).toBe(50);
+      expect(summary.overall.outputTokens).toBe(15);
+      expect(summary.overall.totalTokens).toBe(65);
+      expect(summary.trend[0]?.requests).toBe(2);
+      expect(summary.trend[1]?.requests).toBe(0);
+      expect(summary.trend[2]?.requests).toBe(0);
+      expect(summary.trend[6]?.requests).toBe(0);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("builds month dashboard windows using the full local month length", async () => {
+    const app = await createTestApp();
+
+    try {
+      const now = new Date("2026-02-15T03:22:03.000Z");
+
+      insertAuditRow(app, {
+        occurredAt: "2026-01-31T16:30:00.000Z",
+        inputTokens: 8,
+        outputTokens: 2,
+        totalTokens: 10
+      });
+      insertAuditRow(app, {
+        occurredAt: "2026-02-28T15:30:00.000Z",
+        inputTokens: 15,
+        outputTokens: 5,
+        totalTokens: 20
+      });
+      insertAuditRow(app, {
+        occurredAt: "2026-03-01T00:30:00.000Z",
+        inputTokens: 50,
+        outputTokens: 10,
+        totalTokens: 60
+      });
+
+      const summary = buildDashboardSummary(
+        app.appCtx.database.sqlite,
+        "month",
+        "Asia/Shanghai",
+        now
+      );
+
+      expect(summary.windowStart).toBe("2026-01-31T16:00:00.000Z");
+      expect(summary.windowEnd).toBe("2026-02-28T15:59:59.999Z");
+      expect(summary.currentBucketIndex).toBe(14);
+      expect(summary.trend).toHaveLength(28);
+      expect(summary.trend[0]?.label).toBe("02-01");
+      expect(summary.trend[27]?.label).toBe("02-28");
+      expect(summary.overall.inputTokens).toBe(23);
+      expect(summary.overall.outputTokens).toBe(7);
+      expect(summary.overall.totalTokens).toBe(30);
+      expect(summary.trend[0]?.requests).toBe(1);
+      expect(summary.trend[27]?.requests).toBe(1);
     } finally {
       await app.close();
     }

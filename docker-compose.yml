@@ -13,7 +13,7 @@ services:
     volumes:
       - ./data:/data
     healthcheck:
-      test: ["CMD", "node", "-e", "fetch(`http://127.0.0.1:${process.env.PORT||4000}/health/ready`).then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:' + (process.env.PORT || 4000) + '/health/ready').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
       interval: 30s
       timeout: 5s
       retries: 3

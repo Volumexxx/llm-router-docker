@@ -60,6 +60,22 @@ describe("extractUsage", () => {
     expect(usage.totalTokens).toBe(27);
   });
 
+  it("reads Anthropic usage payloads", () => {
+    const usage = extractUsage({
+      type: "message",
+      usage: {
+        input_tokens: 18,
+        cache_read_input_tokens: 5,
+        output_tokens: 9
+      }
+    });
+
+    expect(usage.inputTokens).toBe(18);
+    expect(usage.cachedInputTokens).toBe(5);
+    expect(usage.outputTokens).toBe(9);
+    expect(usage.totalTokens).toBe(27);
+  });
+
   it("returns null usage fields when payload has no usage object", () => {
     const usage = extractUsage({
       object: "chat.completion"

@@ -181,6 +181,7 @@ export function AuditPage({
               <option value="">全部</option>
               <option value="model_list">模型列表</option>
               <option value="chat_completions">Chat Completions</option>
+              <option value="messages">Messages</option>
               <option value="responses">Responses</option>
               <option value="admin_login">后台登录</option>
               <option value="security">安全事件</option>

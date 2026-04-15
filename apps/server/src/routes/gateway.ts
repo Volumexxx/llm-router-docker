@@ -1,14 +1,21 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 
-import { estimateCost } from "../../../../packages/shared/src/index.ts";
-import { sendJsonError } from "../lib/http.ts";
+import { ANTHROPIC_API_VERSION, estimateCost } from "../../../../packages/shared/src/index.ts";
+import { sendGatewayError } from "../lib/http.ts";
 import { clampText, parseJson } from "../lib/utils.ts";
-import { requireGatewayBearerToken, rejectGatewayRequest } from "../security/auth.ts";
+import {
+  requireGatewayApiKeyHeader,
+  requireGatewayBearerToken,
+  rejectGatewayRequest
+} from "../security/auth.ts";
 import { getClientIp, isIpAllowed } from "../security/ip.ts";
 import { authenticateApiKey } from "../services/api-keys.ts";
 import { writeAuditLog, writeSecurityAuditFromRequest } from "../services/audit.ts";
 import { listVisibleModels, resolveRoutableBinding } from "../services/models.ts";
 import { proxyProviderJson, streamProviderResponse } from "../services/provider-client.ts";
+
+type GatewayProtocol = "openai" | "anthropic";
+type EndpointType = "chat_completions" | "responses" | "messages";
 
 function classifyFailure(errorCode: string | null): "upstream_error" | "network_error" {
   return errorCode === "network_error" ? "network_error" : "upstream_error";
@@ -24,16 +31,82 @@ function buildApiKeyAuditContext(request: FastifyRequest) {
     : {};
 }
 
+function detectGatewayProtocol(request: FastifyRequest): GatewayProtocol {
+  if (request.url.startsWith("/v1/messages")) {
+    return "anthropic";
+  }
+
+  if (request.url.startsWith("/v1/models") && request.headers["anthropic-version"]) {
+    return "anthropic";
+  }
+
+  return "openai";
+}
+
+function validateAnthropicVersion(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  protocol: GatewayProtocol
+): string | null {
+  if (protocol !== "anthropic") {
+    return null;
+  }
+
+  const header = request.headers["anthropic-version"];
+  if (typeof header !== "string" || !header.trim()) {
+    rejectGatewayRequest(
+      request,
+      reply,
+      "anthropic_version_required",
+      400,
+      "Anthropic requests require the anthropic-version header",
+      {
+        endpointType: request.url.startsWith("/v1/messages") ? "messages" : "model_list",
+        statusCategory: "configuration_error",
+        protocol
+      }
+    );
+    return null;
+  }
+
+  if (header.trim() !== ANTHROPIC_API_VERSION) {
+    rejectGatewayRequest(
+      request,
+      reply,
+      "unsupported_anthropic_version",
+      400,
+      `Only anthropic-version ${ANTHROPIC_API_VERSION} is supported`,
+      {
+        endpointType: request.url.startsWith("/v1/messages") ? "messages" : "model_list",
+        statusCategory: "configuration_error",
+        protocol
+      }
+    );
+    return null;
+  }
+
+  return header.trim();
+}
+
+function readGatewayToken(request: FastifyRequest, protocol: GatewayProtocol): string | null {
+  return protocol === "anthropic"
+    ? requireGatewayApiKeyHeader(request)
+    : requireGatewayBearerToken(request);
+}
+
 async function authorizeGatewayRequest(
   request: FastifyRequest,
-  reply: FastifyReply
-): Promise<boolean> {
+  reply: FastifyReply,
+  protocol: GatewayProtocol
+): Promise<{ anthropicVersion: string | null } | null> {
   const { appCtx } = request.server;
   const ip = getClientIp(request);
 
   if (!isIpAllowed(ip, appCtx.config.apiCidrs)) {
-    rejectGatewayRequest(request, reply, "api_ip_not_allowed", 403, "Current IP is not allowed");
-    return false;
+    rejectGatewayRequest(request, reply, "api_ip_not_allowed", 403, "Current IP is not allowed", {
+      protocol
+    });
+    return null;
   }
 
   const limiter = appCtx.state.apiLimiter.consume(
@@ -45,7 +118,7 @@ async function authorizeGatewayRequest(
   if (!limiter.allowed) {
     writeSecurityAuditFromRequest(appCtx.database.sqlite, request, {
       requestId: request.id,
-      endpointType: "security",
+      endpointType: protocol === "anthropic" && request.url.startsWith("/v1/messages") ? "messages" : "security",
       statusCategory: "security_policy",
       httpStatus: 429,
       latencyMs: 0,
@@ -54,22 +127,32 @@ async function authorizeGatewayRequest(
     });
 
     reply.header("retry-after", Math.ceil(limiter.retryAfterMs / 1000));
-    reply.code(429).send({
-      error: {
-        code: "api_rate_limited",
-        message: "API rate limit exceeded, please retry later"
+    sendGatewayError(reply, 429, protocol, "api_rate_limited", "API rate limit exceeded, please retry later");
+    return null;
+  }
+
+  const anthropicVersion = validateAnthropicVersion(request, reply, protocol);
+  if (protocol === "anthropic" && !anthropicVersion) {
+    return null;
+  }
+
+  const token = readGatewayToken(request, protocol);
+  if (!token) {
+    rejectGatewayRequest(
+      request,
+      reply,
+      "gateway_auth_required",
+      401,
+      "Missing API key",
+      {
+        endpointType: protocol === "anthropic" && request.url.startsWith("/v1/messages") ? "messages" : undefined,
+        protocol
       }
-    });
-    return false;
+    );
+    return null;
   }
 
-  const bearerToken = requireGatewayBearerToken(request);
-  if (!bearerToken) {
-    rejectGatewayRequest(request, reply, "gateway_auth_required", 401, "Missing API key");
-    return false;
-  }
-
-  const authResult = await authenticateApiKey(appCtx.database.sqlite, bearerToken);
+  const authResult = await authenticateApiKey(appCtx.database.sqlite, token);
   if (authResult.kind === "no_active_keys") {
     rejectGatewayRequest(
       request,
@@ -78,15 +161,20 @@ async function authorizeGatewayRequest(
       503,
       "No active API key is configured yet. Please create one in the admin console first.",
       {
-        statusCategory: "configuration_error"
+        statusCategory: "configuration_error",
+        endpointType: protocol === "anthropic" && request.url.startsWith("/v1/messages") ? "messages" : undefined,
+        protocol
       }
     );
-    return false;
+    return null;
   }
 
   if (authResult.kind !== "matched" || !authResult.apiKey) {
-    rejectGatewayRequest(request, reply, "gateway_auth_invalid", 401, "Invalid API key");
-    return false;
+    rejectGatewayRequest(request, reply, "gateway_auth_invalid", 401, "Invalid API key", {
+      endpointType: protocol === "anthropic" && request.url.startsWith("/v1/messages") ? "messages" : undefined,
+      protocol
+    });
+    return null;
   }
 
   request.gatewayApiKey = {
@@ -97,23 +185,40 @@ async function authorizeGatewayRequest(
     allowedModelAliasIds: authResult.apiKey.allowedModelAliasIds
   };
 
-  return true;
+  return {
+    anthropicVersion
+  };
+}
+
+function sendModelRequiredError(
+  reply: FastifyReply,
+  protocol: GatewayProtocol
+): void {
+  sendGatewayError(reply, 400, protocol, "model_required", "Request body is missing model");
+}
+
+function sendModelNotRoutableError(
+  reply: FastifyReply,
+  protocol: GatewayProtocol
+): void {
+  sendGatewayError(reply, 404, protocol, "model_not_routable", "Model alias is not routable");
 }
 
 async function handleProxyEndpoint(
   app: FastifyInstance,
-  endpointType: "chat_completions" | "responses",
-  endpointPath: "chat/completions" | "responses"
+  endpointType: EndpointType,
+  path: string,
+  gatewayProtocol: GatewayProtocol
 ): Promise<void> {
-  app.post(`/v1/${endpointPath}`, async (request, reply) => {
+  app.post(path, async (request, reply) => {
     const started = Date.now();
-    if (!(await authorizeGatewayRequest(request, reply))) {
+    const auth = await authorizeGatewayRequest(request, reply, gatewayProtocol);
+    if (!auth) {
       return;
     }
 
     const body = request.body as { model?: string; stream?: boolean } | undefined;
     const requestedModel = body?.model;
-
     if (!requestedModel) {
       writeAuditLog(request.server.appCtx.database.sqlite, {
         requestId: request.id,
@@ -128,8 +233,7 @@ async function handleProxyEndpoint(
         userAgent: request.headers["user-agent"]?.toString() ?? null,
         ...buildApiKeyAuditContext(request)
       });
-
-      sendJsonError(reply, 400, "model_required", "Request body is missing model");
+      sendModelRequiredError(reply, gatewayProtocol);
       return;
     }
 
@@ -154,8 +258,7 @@ async function handleProxyEndpoint(
         userAgent: request.headers["user-agent"]?.toString() ?? null,
         ...buildApiKeyAuditContext(request)
       });
-
-      sendJsonError(reply, 404, "model_not_routable", "Model alias is not routable");
+      sendModelNotRoutableError(reply, gatewayProtocol);
       return;
     }
 
@@ -183,9 +286,10 @@ async function handleProxyEndpoint(
         ...buildApiKeyAuditContext(request)
       });
 
-      sendJsonError(
+      sendGatewayError(
         reply,
         429,
+        gatewayProtocol,
         "proxy_concurrency_limited",
         "Maximum active proxy request limit reached"
       );
@@ -195,14 +299,22 @@ async function handleProxyEndpoint(
     request.server.appCtx.state.activeProxyRequests += 1;
 
     try {
+      const requestContext = {
+        gatewayProtocol,
+        endpointType,
+        anthropicVersion: auth.anthropicVersion
+      } as const;
+
       if (body?.stream) {
         try {
           const result = await streamProviderResponse(
-            request.server.appCtx.fetchImpl,
-            request.server.appCtx.config,
-            binding,
-            endpointPath,
-            request.body,
+            {
+              fetchImpl: request.server.appCtx.fetchImpl,
+              config: request.server.appCtx.config,
+              binding,
+              request: requestContext,
+              body: request.body
+            },
             reply
           );
 
@@ -264,13 +376,13 @@ async function handleProxyEndpoint(
         return;
       }
 
-      const result = await proxyProviderJson(
-        request.server.appCtx.fetchImpl,
-        request.server.appCtx.config,
+      const result = await proxyProviderJson({
+        fetchImpl: request.server.appCtx.fetchImpl,
+        config: request.server.appCtx.config,
         binding,
-        endpointPath,
-        request.body
-      );
+        request: requestContext,
+        body: request.body
+      });
 
       if (!result.ok) {
         const payload = parseJson(result.bodyText) ?? result.bodyText;
@@ -329,7 +441,9 @@ async function handleProxyEndpoint(
 export async function registerGatewayRoutes(app: FastifyInstance): Promise<void> {
   app.get("/v1/models", async (request, reply) => {
     const started = Date.now();
-    if (!(await authorizeGatewayRequest(request, reply))) {
+    const protocol = detectGatewayProtocol(request);
+    const auth = await authorizeGatewayRequest(request, reply, protocol);
+    if (!auth) {
       return;
     }
 
@@ -349,6 +463,21 @@ export async function registerGatewayRoutes(app: FastifyInstance): Promise<void>
       ...buildApiKeyAuditContext(request)
     });
 
+    if (protocol === "anthropic") {
+      reply.send({
+        data: models.map((model) => ({
+          type: "model",
+          id: model.alias,
+          display_name: model.display_name,
+          created_at: 0
+        })),
+        has_more: false,
+        first_id: models[0]?.alias ?? null,
+        last_id: models.at(-1)?.alias ?? null
+      });
+      return;
+    }
+
     reply.send({
       object: "list",
       data: models.map((model) => ({
@@ -360,6 +489,7 @@ export async function registerGatewayRoutes(app: FastifyInstance): Promise<void>
     });
   });
 
-  await handleProxyEndpoint(app, "chat_completions", "chat/completions");
-  await handleProxyEndpoint(app, "responses", "responses");
+  await handleProxyEndpoint(app, "chat_completions", "/v1/chat/completions", "openai");
+  await handleProxyEndpoint(app, "responses", "/v1/responses", "openai");
+  await handleProxyEndpoint(app, "messages", "/v1/messages", "anthropic");
 }

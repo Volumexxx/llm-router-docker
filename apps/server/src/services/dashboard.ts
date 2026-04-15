@@ -41,65 +41,264 @@ interface AuditMetricRow {
   api_key_masked_preview: string | null;
 }
 
-function buildWindow(range: DashboardRange): { start: Date; end: Date; bucketCount: number; stepMs: number } {
-  const end = new Date();
+interface ZonedDateTimeParts {
+  year: number;
+  month: number;
+  day: number;
+  hour: number;
+  minute: number;
+  second: number;
+}
 
-  if (range === "day") {
-    const aligned = new Date(end);
-    aligned.setUTCMinutes(0, 0, 0);
-    return {
-      end: aligned,
-      start: new Date(aligned.getTime() - 23 * 60 * 60 * 1000),
-      bucketCount: 24,
-      stepMs: 60 * 60 * 1000
-    };
+interface DashboardWindow {
+  start: Date;
+  end: Date;
+  labels: string[];
+  currentBucketIndex: number;
+  startParts: ZonedDateTimeParts;
+}
+
+const HOUR_MS = 60 * 60 * 1000;
+const DAY_MS = 24 * HOUR_MS;
+
+const formatterCache = new Map<string, Intl.DateTimeFormat>();
+
+function getFormatter(timezone: string): Intl.DateTimeFormat {
+  const cached = formatterCache.get(timezone);
+  if (cached) {
+    return cached;
   }
 
-  const aligned = new Date(Date.UTC(end.getUTCFullYear(), end.getUTCMonth(), end.getUTCDate()));
-  const days = range === "week" ? 7 : 30;
+  const formatter = new Intl.DateTimeFormat("en-CA", {
+    timeZone: timezone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23"
+  });
+  formatterCache.set(timezone, formatter);
+  return formatter;
+}
+
+function normalizeTimezone(timezone: string): string {
+  try {
+    getFormatter(timezone);
+    return timezone;
+  } catch {
+    return "UTC";
+  }
+}
+
+function readZonedParts(date: Date, timezone: string): ZonedDateTimeParts {
+  const values: Partial<Record<keyof ZonedDateTimeParts, number>> = {};
+
+  for (const part of getFormatter(timezone).formatToParts(date)) {
+    if (
+      part.type === "year" ||
+      part.type === "month" ||
+      part.type === "day" ||
+      part.type === "hour" ||
+      part.type === "minute" ||
+      part.type === "second"
+    ) {
+      values[part.type] = Number(part.value);
+    }
+  }
+
   return {
-    end: aligned,
-    start: new Date(aligned.getTime() - (days - 1) * 24 * 60 * 60 * 1000),
-    bucketCount: days,
-    stepMs: 24 * 60 * 60 * 1000
+    year: values.year ?? 1970,
+    month: values.month ?? 1,
+    day: values.day ?? 1,
+    hour: values.hour ?? 0,
+    minute: values.minute ?? 0,
+    second: values.second ?? 0
   };
 }
 
-function makeBuckets(range: DashboardRange): BucketAccumulator[] {
-  const window = buildWindow(range);
+function zonedTimeToUtc(parts: ZonedDateTimeParts, timezone: string): Date {
+  let timestamp = Date.UTC(
+    parts.year,
+    parts.month - 1,
+    parts.day,
+    parts.hour,
+    parts.minute,
+    parts.second,
+    0
+  );
 
-  return Array.from({ length: window.bucketCount }, (_, index) => {
-    const date = new Date(window.start.getTime() + index * window.stepMs);
-    const label =
-      range === "day"
-        ? `${String(date.getUTCHours()).padStart(2, "0")}:00`
-        : `${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}`;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const actual = readZonedParts(new Date(timestamp), timezone);
+    const actualAsUtc = Date.UTC(
+      actual.year,
+      actual.month - 1,
+      actual.day,
+      actual.hour,
+      actual.minute,
+      actual.second,
+      0
+    );
+    const wantedAsUtc = Date.UTC(
+      parts.year,
+      parts.month - 1,
+      parts.day,
+      parts.hour,
+      parts.minute,
+      parts.second,
+      0
+    );
+    const delta = actualAsUtc - wantedAsUtc;
 
-    return {
-      label,
-      latencies: [],
-      requests: 0,
-      successes: 0,
-      failures: 0,
-      inputTokens: 0,
-      outputTokens: 0,
-      cacheTokens: 0,
-      totalTokens: 0,
-      estimatedCost: 0
-    };
-  });
+    if (delta === 0) {
+      break;
+    }
+
+    timestamp -= delta;
+  }
+
+  return new Date(timestamp);
 }
 
-function bucketIndex(range: DashboardRange, occurredAt: string): number | null {
-  const window = buildWindow(range);
+function startOfZonedDay(parts: ZonedDateTimeParts): ZonedDateTimeParts {
+  return {
+    year: parts.year,
+    month: parts.month,
+    day: parts.day,
+    hour: 0,
+    minute: 0,
+    second: 0
+  };
+}
+
+function addUtcDays(parts: ZonedDateTimeParts, days: number): ZonedDateTimeParts {
+  const date = new Date(Date.UTC(parts.year, parts.month - 1, parts.day + days));
+  return {
+    year: date.getUTCFullYear(),
+    month: date.getUTCMonth() + 1,
+    day: date.getUTCDate(),
+    hour: 0,
+    minute: 0,
+    second: 0
+  };
+}
+
+function daysInMonth(year: number, month: number): number {
+  return new Date(Date.UTC(year, month, 0)).getUTCDate();
+}
+
+function formatMonthDay(parts: ZonedDateTimeParts): string {
+  return `${String(parts.month).padStart(2, "0")}-${String(parts.day).padStart(2, "0")}`;
+}
+
+function buildDashboardWindow(
+  range: DashboardRange,
+  timezoneInput: string,
+  now = new Date()
+): DashboardWindow {
+  const timezone = normalizeTimezone(timezoneInput);
+  const nowParts = readZonedParts(now, timezone);
+
+  if (range === "day") {
+    const startParts = startOfZonedDay(nowParts);
+    const nextStartParts = addUtcDays(startParts, 1);
+
+    return {
+      start: zonedTimeToUtc(startParts, timezone),
+      end: new Date(zonedTimeToUtc(nextStartParts, timezone).getTime() - 1),
+      labels: Array.from({ length: 24 }, (_, index) => `${String(index).padStart(2, "0")}:00`),
+      currentBucketIndex: nowParts.hour,
+      startParts
+    };
+  }
+
+  if (range === "week") {
+    const dayOfWeek = new Date(Date.UTC(nowParts.year, nowParts.month - 1, nowParts.day)).getUTCDay();
+    const daysSinceMonday = (dayOfWeek + 6) % 7;
+    const startParts = addUtcDays(startOfZonedDay(nowParts), -daysSinceMonday);
+    const nextStartParts = addUtcDays(startParts, 7);
+    const labels = Array.from({ length: 7 }, (_, index) => formatMonthDay(addUtcDays(startParts, index)));
+
+    return {
+      start: zonedTimeToUtc(startParts, timezone),
+      end: new Date(zonedTimeToUtc(nextStartParts, timezone).getTime() - 1),
+      labels,
+      currentBucketIndex: daysSinceMonday,
+      startParts
+    };
+  }
+
+  const startParts = {
+    year: nowParts.year,
+    month: nowParts.month,
+    day: 1,
+    hour: 0,
+    minute: 0,
+    second: 0
+  };
+  const monthLength = daysInMonth(nowParts.year, nowParts.month);
+  const nextStartParts =
+    nowParts.month === 12
+      ? { ...startParts, year: nowParts.year + 1, month: 1 }
+      : { ...startParts, month: nowParts.month + 1 };
+  const labels = Array.from({ length: monthLength }, (_, index) =>
+    formatMonthDay({
+      ...startParts,
+      day: index + 1
+    })
+  );
+
+  return {
+    start: zonedTimeToUtc(startParts, timezone),
+    end: new Date(zonedTimeToUtc(nextStartParts, timezone).getTime() - 1),
+    labels,
+    currentBucketIndex: nowParts.day - 1,
+    startParts
+  };
+}
+
+function makeBuckets(labels: string[]): BucketAccumulator[] {
+  return labels.map((label) => ({
+    label,
+    latencies: [],
+    requests: 0,
+    successes: 0,
+    failures: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheTokens: 0,
+    totalTokens: 0,
+    estimatedCost: 0
+  }));
+}
+
+function bucketIndex(
+  range: DashboardRange,
+  occurredAt: string,
+  timezone: string,
+  window: DashboardWindow
+): number | null {
   const timestamp = new Date(occurredAt).getTime();
-  const diff = timestamp - window.start.getTime();
-  if (diff < 0) {
+  if (!Number.isFinite(timestamp) || timestamp < window.start.getTime() || timestamp > window.end.getTime()) {
     return null;
   }
 
-  const index = Math.floor(diff / window.stepMs);
-  return index >= 0 && index < window.bucketCount ? index : null;
+  const parts = readZonedParts(new Date(timestamp), timezone);
+
+  if (range === "day") {
+    return parts.hour >= 0 && parts.hour < window.labels.length ? parts.hour : null;
+  }
+
+  const localEventDay = Date.UTC(parts.year, parts.month - 1, parts.day);
+  const localWindowStartDay = Date.UTC(
+    window.startParts.year,
+    window.startParts.month - 1,
+    window.startParts.day
+  );
+  const index = Math.floor((localEventDay - localWindowStartDay) / DAY_MS);
+
+  return index >= 0 && index < window.labels.length ? index : null;
 }
 
 function finalizeBuckets(buckets: BucketAccumulator[]): TrendPoint[] {
@@ -197,16 +396,17 @@ function accumulateBucket(
 
 export function buildDashboardSummary(
   sqlite: DatabaseSync,
-  range: DashboardRange
+  range: DashboardRange,
+  timezoneInput = "UTC",
+  now = new Date()
 ): DashboardSummary {
-  const window = buildWindow(range);
-  const rows = queryInferenceAuditRows(
-    sqlite,
-    window.start.toISOString(),
-    new Date(window.end.getTime() + window.stepMs - 1).toISOString()
-  ).map((row) => toAuditMetricRow(row));
+  const timezone = normalizeTimezone(timezoneInput);
+  const window = buildDashboardWindow(range, timezone, now);
+  const rows = queryInferenceAuditRows(sqlite, window.start.toISOString(), window.end.toISOString()).map((row) =>
+    toAuditMetricRow(row)
+  );
 
-  const overallBuckets = makeBuckets(range);
+  const overallBuckets = makeBuckets(window.labels);
   const providerBuckets = new Map<string, BucketAccumulator[]>();
   const modelBuckets = new Map<string, BucketAccumulator[]>();
   const apiKeyBuckets = new Map<
@@ -228,7 +428,7 @@ export function buildDashboardSummary(
   let failures = 0;
 
   for (const row of rows) {
-    const index = bucketIndex(range, row.occurred_at);
+    const index = bucketIndex(range, row.occurred_at, timezone, window);
     if (index == null) {
       continue;
     }
@@ -244,17 +444,17 @@ export function buildDashboardSummary(
 
     accumulateBucket(overallBuckets[index], isSuccess, latency, tokens, cost);
 
-    const providerBucketList = providerBuckets.get(providerLabel) ?? makeBuckets(range);
+    const providerBucketList = providerBuckets.get(providerLabel) ?? makeBuckets(window.labels);
     accumulateBucket(providerBucketList[index], isSuccess, latency, tokens, cost);
     providerBuckets.set(providerLabel, providerBucketList);
 
-    const modelBucketList = modelBuckets.get(modelLabel) ?? makeBuckets(range);
+    const modelBucketList = modelBuckets.get(modelLabel) ?? makeBuckets(window.labels);
     accumulateBucket(modelBucketList[index], isSuccess, latency, tokens, cost);
     modelBuckets.set(modelLabel, modelBucketList);
 
     const apiKeyBucketEntry = apiKeyBuckets.get(apiKeyGroupKey) ?? {
       label: apiKeyLabel,
-      buckets: makeBuckets(range)
+      buckets: makeBuckets(window.labels)
     };
     apiKeyBucketEntry.label = apiKeyLabel;
     accumulateBucket(apiKeyBucketEntry.buckets[index], isSuccess, latency, tokens, cost);
@@ -277,7 +477,9 @@ export function buildDashboardSummary(
   return {
     range,
     windowStart: window.start.toISOString(),
-    windowEnd: new Date(window.end.getTime() + window.stepMs - 1).toISOString(),
+    windowEnd: window.end.toISOString(),
+    timezone,
+    currentBucketIndex: window.currentBucketIndex,
     overall: {
       requests: successes + failures,
       successes,

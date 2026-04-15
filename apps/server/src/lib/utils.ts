@@ -42,6 +42,19 @@ export function joinUrl(baseUrl: string, pathname: string): string {
   return `${base}/${suffix}`;
 }
 
+export function serializeSseBlock(input: { event?: string; data: string }): string {
+  const lines: string[] = [];
+  if (input.event) {
+    lines.push(`event: ${input.event}`);
+  }
+
+  for (const line of input.data.split("\n")) {
+    lines.push(`data: ${line}`);
+  }
+
+  return `${lines.join("\n")}\n\n`;
+}
+
 function readNumber(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
@@ -65,7 +78,9 @@ function looksLikeUsageRecord(value: unknown): value is Record<string, unknown> 
     "output_tokens",
     "total_tokens",
     "prompt_tokens_details",
-    "input_tokens_details"
+    "input_tokens_details",
+    "cache_creation_input_tokens",
+    "cache_read_input_tokens"
   ].some((key) => key in record);
 }
 
@@ -106,6 +121,11 @@ function findUsageRecord(payload: unknown): Record<string, unknown> | null {
 }
 
 function readCachedInputTokens(usage: Record<string, unknown>): number | null {
+  const cacheReadTokens = readNumber(usage.cache_read_input_tokens);
+  if (cacheReadTokens != null) {
+    return cacheReadTokens;
+  }
+
   const promptDetails = usage.prompt_tokens_details;
   if (promptDetails && typeof promptDetails === "object") {
     const cachedTokens = readNumber((promptDetails as Record<string, unknown>).cached_tokens);
@@ -158,13 +178,15 @@ export function getErrorSummary(
   bodyText: string,
   fallback: string
 ): { code: string | null; summary: string } {
-  const parsed = parseJson<{ error?: { code?: string; message?: string }; message?: string }>(
-    bodyText
-  );
+  const parsed = parseJson<{
+    error?: { code?: string; message?: string; type?: string };
+    message?: string;
+    type?: string;
+  }>(bodyText);
 
   if (parsed?.error?.message) {
     return {
-      code: parsed.error.code ?? null,
+      code: parsed.error.code ?? parsed.error.type ?? null,
       summary: clampText(parsed.error.message, 500) ?? fallback
     };
   }

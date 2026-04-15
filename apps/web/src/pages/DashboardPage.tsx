@@ -279,7 +279,8 @@ export function DashboardPage({ dashboard, range, setRange }: DashboardPageProps
             <p className="eyebrow">Metrics Command Center</p>
             <h3>运行指标总览</h3>
             <p className="muted">
-              {formatDateTime(dashboard.windowStart)} - {formatDateTime(dashboard.windowEnd)}
+              {formatDateTime(dashboard.windowStart, dashboard.timezone)} -{" "}
+              {formatDateTime(dashboard.windowEnd, dashboard.timezone)}
             </p>
           </div>
 
@@ -458,6 +459,7 @@ export function DashboardPage({ dashboard, range, setRange }: DashboardPageProps
           <TrendChart
             series={chartState.series}
             valueFormatter={(value) => metricConfig[chartState.metricKey].format(value)}
+            defaultSelectedIndex={dashboard.currentBucketIndex}
           />
         ) : null}
       </Modal>

@@ -4,7 +4,7 @@
 
 它提供：
 
-- 对外的 OpenAI 兼容网关：`GET /v1/models`、`POST /v1/chat/completions`、`POST /v1/responses`
+- 对外的 OpenAI / Anthropic 兼容网关：`GET /v1/models`、`POST /v1/chat/completions`、`POST /v1/responses`、`POST /v1/messages`
 - 中文管理后台：Provider 管理、模型路由、审计日志、仪表盘、系统与安全
 - 单容器 + SQLite 持久化部署方式，数据目录默认挂载到 `/data`
 - 反向代理适配、后台会话、IP 白名单、限流、健康检查
@@ -118,6 +118,14 @@
 - `GET /v1/models`
 - `POST /v1/chat/completions`
 - `POST /v1/responses`
+- `POST /v1/messages`
+
+Anthropic / Claude 兼容说明：
+- `POST /v1/messages` 使用 `x-api-key` + `anthropic-version: 2023-06-01`
+- `GET /v1/models` 在带 `anthropic-version` 头时返回 Anthropic 风格列表结构
+- Provider 支持 `openai` 与 `anthropic` 两种协议类型
+- Anthropic provider 推荐填写 `https://api.anthropic.com`
+- 当前不支持 `tools`、`thinking`、beta headers，以及 OpenAI `responses` 到 Anthropic provider 的映射
 
 管理后台：
 
@@ -187,6 +195,7 @@ labels:
 - 模型别名与多 Provider 绑定
 - 运行顺序应用、默认顺序保存、重启恢复默认顺序
 - OpenAI 兼容网关转发
+- Anthropic / Claude 兼容网关与上游 provider 转发
 - 多 API Key 管理与按 Key 审计 / 仪表盘统计
 - IP 白名单、基础限流、最大并发控制、代理头识别
 

@@ -57,6 +57,8 @@ export interface ProviderPayload {
   name: string;
   baseUrl: string;
   apiKey: string;
+  protocol: "openai" | "anthropic";
+  apiVersion?: string | null;
   enabled: boolean;
   testTimeoutMs: number;
 }
@@ -65,6 +67,8 @@ export interface ProviderItem {
   id: string;
   name: string;
   baseUrl: string;
+  protocol: "openai" | "anthropic";
+  apiVersion: string | null;
   enabled: boolean;
   testTimeoutMs: number;
   apiKeyPreview: string | null;
@@ -152,6 +156,8 @@ export interface DashboardSummary {
   range: "day" | "week" | "month";
   windowStart: string;
   windowEnd: string;
+  timezone: string;
+  currentBucketIndex: number;
   overall: {
     requests: number;
     successes: number;

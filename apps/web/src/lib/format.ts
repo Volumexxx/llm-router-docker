@@ -35,6 +35,6 @@ export function formatDuration(value: number | null | undefined): string {
   return `${formatNumber(value)} ms`;
 }
 
-export function formatDateTime(value: string): string {
-  return new Date(value).toLocaleString("zh-CN");
+export function formatDateTime(value: string, timezone?: string): string {
+  return new Date(value).toLocaleString("zh-CN", timezone ? { timeZone: timezone } : undefined);
 }

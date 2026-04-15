@@ -5,12 +5,16 @@ export const MODEL_ALIAS_REGEX = /^[A-Za-z0-9._:-]+$/;
 export const endpointTypeSchema = z.enum([
   "model_list",
   "chat_completions",
+  "messages",
   "responses",
   "admin_login",
   "admin_logout",
   "admin_system",
   "security"
 ]);
+
+export const providerProtocolSchema = z.enum(["openai", "anthropic"]);
+export const ANTHROPIC_API_VERSION = "2023-06-01";
 
 export const auditStatusSchema = z.enum([
   "success",
@@ -32,6 +36,8 @@ export const providerCreateSchema = z.object({
   name: z.string().min(1).max(120),
   baseUrl: z.string().url(),
   apiKey: z.string().min(1).max(512),
+  protocol: providerProtocolSchema.default("openai"),
+  apiVersion: z.string().min(1).max(64).optional().nullable(),
   enabled: z.boolean().default(true),
   testTimeoutMs: z.number().int().min(1000).max(600000).default(10000)
 });
@@ -40,6 +46,8 @@ export const providerUpdateSchema = z.object({
   name: z.string().min(1).max(120).optional(),
   baseUrl: z.string().url().optional(),
   apiKey: z.string().min(1).max(512).optional(),
+  protocol: providerProtocolSchema.optional(),
+  apiVersion: z.string().min(1).max(64).optional().nullable(),
   enabled: z.boolean().optional(),
   testTimeoutMs: z.number().int().min(1000).max(600000).optional()
 });
@@ -172,6 +180,8 @@ export interface DashboardSummary {
   range: z.infer<typeof dashboardRangeSchema>;
   windowStart: string;
   windowEnd: string;
+  timezone: string;
+  currentBucketIndex: number;
   overall: {
     requests: number;
     successes: number;
