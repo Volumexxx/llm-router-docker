@@ -28,7 +28,11 @@ afterEach(() => {
   }
 });
 
-async function createTestApp(fetchImpl?: typeof fetch, dataDir?: string) {
+async function createTestApp(
+  fetchImpl?: typeof fetch,
+  dataDir?: string,
+  configOverrides: Partial<Record<string, string | number | boolean | undefined>> = {}
+) {
   const dir = dataDir ?? createTempDir();
   cleanupDirs.push(dir);
 
@@ -39,7 +43,8 @@ async function createTestApp(fetchImpl?: typeof fetch, dataDir?: string) {
       DATA_DIR: dir,
       CONFIG_ENCRYPTION_KEY: "0123456789abcdef0123456789abcdef",
       BOOTSTRAP_ADMIN_USERNAME: "admin",
-      BOOTSTRAP_ADMIN_PASSWORD: "admin-password"
+      BOOTSTRAP_ADMIN_PASSWORD: "admin-password",
+      ...configOverrides
     }
   });
 }
@@ -1529,6 +1534,195 @@ describe("llm router server", () => {
     }
   });
 
+  it("deletes unused providers from the admin API", async () => {
+    const app = await createTestApp();
+
+    try {
+      const cookie = await login(app);
+      const provider = await createProvider(app, cookie, {
+        name: "unused-provider",
+        baseUrl: "https://unused-provider.example/v1"
+      });
+
+      const deleteResponse = await app.inject({
+        method: "DELETE",
+        url: `/admin/api/providers/${provider.id}`,
+        headers: {
+          cookie
+        }
+      });
+
+      expect(deleteResponse.statusCode).toBe(200);
+      expect(deleteResponse.json()).toMatchObject({
+        success: true,
+        providerId: provider.id,
+        providerName: "unused-provider",
+        removedBindingCount: 0,
+        affectedModelCount: 0
+      });
+
+      const listResponse = await app.inject({
+        method: "GET",
+        url: "/admin/api/providers",
+        headers: {
+          cookie
+        }
+      });
+
+      expect(listResponse.statusCode).toBe(200);
+      expect(
+        listResponse.json().items.some((item: { id: string }) => item.id === provider.id)
+      ).toBe(false);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("deletes providers and automatically removes dependent bindings without deleting model aliases", async () => {
+    const app = await createTestApp();
+
+    try {
+      const cookie = await login(app);
+      const providerA = await createProvider(app, cookie, {
+        name: "provider-delete-a",
+        baseUrl: "https://provider-delete-a.example/v1"
+      });
+      const providerB = await createProvider(app, cookie, {
+        name: "provider-delete-b",
+        baseUrl: "https://provider-delete-b.example/v1"
+      });
+      const modelA = await createModel(app, cookie, {
+        alias: "provider-delete-model-a",
+        displayName: "Provider Delete Model A"
+      });
+      const modelB = await createModel(app, cookie, {
+        alias: "provider-delete-model-b",
+        displayName: "Provider Delete Model B"
+      });
+
+      await addBinding(app, cookie, modelA.id, {
+        providerId: providerA.id,
+        upstreamModel: "provider-a-model-a"
+      });
+      await addBinding(app, cookie, modelB.id, {
+        providerId: providerA.id,
+        upstreamModel: "provider-a-model-b"
+      });
+      await addBinding(app, cookie, modelB.id, {
+        providerId: providerB.id,
+        upstreamModel: "provider-b-model-b"
+      });
+
+      const deleteResponse = await app.inject({
+        method: "DELETE",
+        url: `/admin/api/providers/${providerA.id}`,
+        headers: {
+          cookie
+        }
+      });
+
+      expect(deleteResponse.statusCode).toBe(200);
+      expect(deleteResponse.json()).toMatchObject({
+        success: true,
+        providerId: providerA.id,
+        removedBindingCount: 2,
+        affectedModelCount: 2
+      });
+
+      const modelsResponse = await app.inject({
+        method: "GET",
+        url: "/admin/api/models",
+        headers: {
+          cookie
+        }
+      });
+
+      expect(modelsResponse.statusCode).toBe(200);
+      const reloadedModelA = modelsResponse
+        .json()
+        .items.find((item: { id: string }) => item.id === modelA.id);
+      const reloadedModelB = modelsResponse
+        .json()
+        .items.find((item: { id: string }) => item.id === modelB.id);
+
+      expect(reloadedModelA).toBeTruthy();
+      expect(reloadedModelA.bindings).toHaveLength(0);
+      expect(reloadedModelB).toBeTruthy();
+      expect(reloadedModelB.bindings).toHaveLength(1);
+      expect(reloadedModelB.bindings[0].providerName).toBe("provider-delete-b");
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("removes provider scopes from api keys when deleting a provider", async () => {
+    const app = await createTestApp();
+
+    try {
+      const cookie = await login(app);
+      const providerA = await createProvider(app, cookie, {
+        name: "provider-scope-delete-a",
+        baseUrl: "https://provider-scope-delete-a.example/v1"
+      });
+      const providerB = await createProvider(app, cookie, {
+        name: "provider-scope-delete-b",
+        baseUrl: "https://provider-scope-delete-b.example/v1"
+      });
+
+      const apiKey = await createGatewayApiKey(app, cookie, {
+        name: "provider-scope-delete-key",
+        allowedProviderIds: [providerA.id, providerB.id]
+      });
+
+      const deleteResponse = await app.inject({
+        method: "DELETE",
+        url: `/admin/api/providers/${providerA.id}`,
+        headers: {
+          cookie
+        }
+      });
+
+      expect(deleteResponse.statusCode).toBe(200);
+
+      const apiKeysResponse = await app.inject({
+        method: "GET",
+        url: "/admin/api/security/api-keys",
+        headers: {
+          cookie
+        }
+      });
+
+      expect(apiKeysResponse.statusCode).toBe(200);
+      expect(
+        apiKeysResponse
+          .json()
+          .items.find((item: { id: string }) => item.id === apiKey.id)?.allowedProviderIds
+      ).toEqual([providerB.id]);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("returns provider_not_found when deleting a nonexistent provider", async () => {
+    const app = await createTestApp();
+
+    try {
+      const cookie = await login(app);
+      const deleteResponse = await app.inject({
+        method: "DELETE",
+        url: `/admin/api/providers/${crypto.randomUUID()}`,
+        headers: {
+          cookie
+        }
+      });
+
+      expect(deleteResponse.statusCode).toBe(404);
+      expect(deleteResponse.json().error.code).toBe("provider_not_found");
+    } finally {
+      await app.close();
+    }
+  });
+
   it("deletes model bindings from the admin API", async () => {
     const app = await createTestApp();
 
@@ -1618,6 +1812,7 @@ describe("llm router server", () => {
       );
 
       expect(summary.timezone).toBe("Asia/Shanghai");
+      expect(summary.anchorDate).toBe("2026-04-15");
       expect(summary.windowStart).toBe("2026-04-14T16:00:00.000Z");
       expect(summary.windowEnd).toBe("2026-04-15T15:59:59.999Z");
       expect(summary.currentBucketIndex).toBe(11);
@@ -1630,6 +1825,76 @@ describe("llm router server", () => {
       expect(summary.trend[0]?.requests).toBe(0);
       expect(summary.trend[11]?.requests).toBe(1);
       expect(summary.trend[23]?.requests).toBe(0);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("returns historical day dashboard data for a requested local date without bleeding into adjacent days", async () => {
+    const app = await createTestApp(undefined, undefined, {
+      TIMEZONE: "Asia/Shanghai"
+    });
+
+    try {
+      const cookie = await login(app);
+
+      insertAuditRow(app, {
+        occurredAt: "2026-04-13T16:30:00.000Z",
+        inputTokens: 12,
+        outputTokens: 4,
+        totalTokens: 16
+      });
+      insertAuditRow(app, {
+        occurredAt: "2026-04-14T15:30:00.000Z",
+        inputTokens: 20,
+        outputTokens: 8,
+        totalTokens: 28
+      });
+      insertAuditRow(app, {
+        occurredAt: "2026-04-14T16:30:00.000Z",
+        inputTokens: 99,
+        outputTokens: 1,
+        totalTokens: 100
+      });
+
+      const response = await app.inject({
+        method: "GET",
+        url: "/admin/api/dashboard?range=day&date=2026-04-14",
+        headers: {
+          cookie
+        }
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json().anchorDate).toBe("2026-04-14");
+      expect(response.json().windowStart).toBe("2026-04-13T16:00:00.000Z");
+      expect(response.json().windowEnd).toBe("2026-04-14T15:59:59.999Z");
+      expect(response.json().currentBucketIndex).toBe(23);
+      expect(response.json().overall.inputTokens).toBe(32);
+      expect(response.json().overall.outputTokens).toBe(12);
+      expect(response.json().overall.totalTokens).toBe(44);
+      expect(response.json().trend[0].requests).toBe(1);
+      expect(response.json().trend[23].requests).toBe(1);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("rejects invalid dashboard date query values", async () => {
+    const app = await createTestApp();
+
+    try {
+      const cookie = await login(app);
+      const response = await app.inject({
+        method: "GET",
+        url: "/admin/api/dashboard?range=day&date=2026-02-31",
+        headers: {
+          cookie
+        }
+      });
+
+      expect(response.statusCode).toBe(400);
+      expect(response.json().error.code).toBe("validation_error");
     } finally {
       await app.close();
     }

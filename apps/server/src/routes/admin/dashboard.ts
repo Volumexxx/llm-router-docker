@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 
-import { dashboardRangeSchema } from "../../../../../packages/shared/src/index.ts";
+import { dashboardQuerySchema } from "../../../../../packages/shared/src/index.ts";
 import { sendValidationError } from "../../lib/http.ts";
 import { enforceAdminIpAllowlist, requireAdminSession } from "../../security/auth.ts";
 import { buildDashboardSummary } from "../../services/dashboard.ts";
@@ -11,12 +11,14 @@ export async function registerAdminDashboardRoutes(app: FastifyInstance): Promis
     { preHandler: [enforceAdminIpAllowlist, requireAdminSession] },
     async (request, reply) => {
       try {
-        const range = dashboardRangeSchema.parse((request.query as { range?: string }).range ?? "day");
+        const query = dashboardQuerySchema.parse(request.query ?? {});
         reply.send(
           buildDashboardSummary(
             request.server.appCtx.database.sqlite,
-            range,
-            request.server.appCtx.config.timezone
+            query.range,
+            request.server.appCtx.config.timezone,
+            new Date(),
+            query.range === "day" ? query.date : undefined
           )
         );
       } catch (error) {

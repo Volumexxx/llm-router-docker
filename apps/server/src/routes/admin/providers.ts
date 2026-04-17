@@ -6,7 +6,14 @@ import {
 } from "../../../../../packages/shared/src/index.ts";
 import { sendJsonError, sendValidationError } from "../../lib/http.ts";
 import { enforceAdminIpAllowlist, requireAdminSession } from "../../security/auth.ts";
-import { getProviderById, isSqliteUniqueConstraintError, listProviders, createProvider, updateProvider } from "../../services/providers.ts";
+import {
+  createProvider,
+  deleteProvider,
+  getProviderById,
+  isSqliteUniqueConstraintError,
+  listProviders,
+  updateProvider
+} from "../../services/providers.ts";
 import { testProviderConnection } from "../../services/provider-client.ts";
 
 export async function registerAdminProviderRoutes(app: FastifyInstance): Promise<void> {
@@ -71,6 +78,26 @@ export async function registerAdminProviderRoutes(app: FastifyInstance): Promise
         }
 
         throw error;
+      }
+    }
+  );
+
+  app.delete(
+    "/admin/api/providers/:providerId",
+    { preHandler: protectedHandlers },
+    async (request, reply) => {
+      try {
+        const providerId = (request.params as { providerId: string }).providerId;
+        const result = deleteProvider(request.server.appCtx.database.sqlite, providerId);
+
+        if (!result) {
+          sendJsonError(reply, 404, "provider_not_found", "Provider 不存在");
+          return;
+        }
+
+        reply.send(result);
+      } catch {
+        sendJsonError(reply, 500, "provider_delete_failed", "Provider 删除失败");
       }
     }
   );

@@ -74,6 +74,14 @@ export interface ProviderItem {
   apiKeyPreview: string | null;
 }
 
+export interface ProviderDeleteResult {
+  success: true;
+  providerId: string;
+  providerName: string;
+  removedBindingCount: number;
+  affectedModelCount: number;
+}
+
 export interface ApiKeyMutationPayload {
   name: string;
   enabled?: boolean;
@@ -157,6 +165,7 @@ export interface DashboardSummary {
   windowStart: string;
   windowEnd: string;
   timezone: string;
+  anchorDate: string;
   currentBucketIndex: number;
   overall: {
     requests: number;
@@ -267,6 +276,10 @@ export const api = {
         method: "PATCH",
         body: JSON.stringify(payload)
       }),
+    remove: (providerId: string) =>
+      request<ProviderDeleteResult>(`/admin/api/providers/${providerId}`, {
+        method: "DELETE"
+      }),
     test: (providerId: string) =>
       request<{
         success: boolean;
@@ -324,8 +337,17 @@ export const api = {
       })
   },
   dashboard: {
-    get: (range: "day" | "week" | "month") =>
-      request<DashboardSummary>(`/admin/api/dashboard?range=${range}`, { method: "GET" })
+    get: (range: "day" | "week" | "month", date?: string) => {
+      const params = new URLSearchParams({
+        range
+      });
+
+      if (range === "day" && date) {
+        params.set("date", date);
+      }
+
+      return request<DashboardSummary>(`/admin/api/dashboard?${params.toString()}`, { method: "GET" });
+    }
   },
   audit: {
     list: (query: Record<string, string | number | undefined>) => {

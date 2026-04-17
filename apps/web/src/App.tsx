@@ -123,7 +123,6 @@ export default function App() {
   const [notice, setNotice] = useState<string | null>(null);
 
   const [providers, setProviders] = useState<ProviderItem[]>([]);
-  const [providerSecrets, setProviderSecrets] = useState<Record<string, string>>({});
   const [newProvider, setNewProvider] = useState(defaultProviderForm);
 
   const [models, setModels] = useState<ModelItem[]>([]);
@@ -131,6 +130,7 @@ export default function App() {
   const [bindingDrafts, setBindingDrafts] = useState<Record<string, BindingPayload>>({});
 
   const [dashboardRange, setDashboardRange] = useState<"day" | "week" | "month">("day");
+  const [dashboardDayDate, setDashboardDayDate] = useState<string | null>(null);
   const [dashboard, setDashboard] = useState<DashboardSummary | null>(null);
 
   const [audit, setAudit] = useState<AuditResponse | null>(null);
@@ -182,9 +182,12 @@ export default function App() {
     setModels(response.items);
   };
 
-  const refreshDashboard = async (range = dashboardRange) => {
-    const response = await api.dashboard.get(range);
+  const refreshDashboard = async (range = dashboardRange, dayDate = dashboardDayDate) => {
+    const response = await api.dashboard.get(range, range === "day" ? (dayDate ?? undefined) : undefined);
     setDashboard(response);
+    if (range === "day") {
+      setDashboardDayDate(response.anchorDate);
+    }
   };
 
   const refreshAudit = async (page = auditFilters.page, overrides?: Partial<AuditFilters>) => {
@@ -268,21 +271,13 @@ export default function App() {
     void refreshDashboard(dashboardRange).catch(handleError);
   }, [dashboardRange, user]);
 
-  const updateProviderField = (
-    providerId: string,
-    field: keyof ProviderItem,
-    value: string | boolean | number | null
-  ) => {
-    setProviders((current) =>
-      current.map((provider) =>
-        provider.id === providerId
-          ? {
-              ...provider,
-              [field]: value
-            }
-          : provider
-      )
-    );
+  const handleDashboardDayDateChange = (date: string) => {
+    const previousDate = dashboardDayDate;
+    setDashboardDayDate(date);
+    void refreshDashboard("day", date).catch((reason) => {
+      setDashboardDayDate(previousDate);
+      handleError(reason);
+    });
   };
 
   const updateModelField = (modelId: string, field: keyof ModelItem, value: string | boolean) => {
@@ -481,18 +476,19 @@ export default function App() {
             dashboard={dashboard}
             range={dashboardRange}
             setRange={setDashboardRange}
+            setDayDate={handleDashboardDayDateChange}
           />
         ) : null}
 
         {section === "providers" ? (
           <ProvidersPage
             providers={providers}
-            providerSecrets={providerSecrets}
-            setProviderSecrets={setProviderSecrets}
+            models={models}
             newProvider={newProvider}
             setNewProvider={setNewProvider}
-            updateProviderField={updateProviderField}
             refreshProviders={refreshProviders}
+            refreshModels={refreshModels}
+            refreshApiKeys={refreshApiKeys}
             onNotice={handleNotice}
             onError={handleError}
           />

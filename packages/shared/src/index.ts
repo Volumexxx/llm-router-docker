@@ -26,6 +26,32 @@ export const auditStatusSchema = z.enum([
 ]);
 
 export const dashboardRangeSchema = z.enum(["day", "week", "month"]);
+const DASHBOARD_DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
+
+export function isValidDashboardDate(value: string): boolean {
+  if (!DASHBOARD_DATE_REGEX.test(value)) {
+    return false;
+  }
+
+  const [year, month, day] = value.split("-").map((part) => Number(part));
+  const date = new Date(Date.UTC(year, month - 1, day));
+
+  return (
+    date.getUTCFullYear() === year &&
+    date.getUTCMonth() === month - 1 &&
+    date.getUTCDate() === day
+  );
+}
+
+export const dashboardDateSchema = z
+  .string()
+  .regex(DASHBOARD_DATE_REGEX, "日期必须为 YYYY-MM-DD")
+  .refine(isValidDashboardDate, "日期必须是有效的日历日期");
+
+export const dashboardQuerySchema = z.object({
+  range: dashboardRangeSchema.default("day"),
+  date: dashboardDateSchema.optional()
+});
 
 export const loginSchema = z.object({
   username: z.string().min(1).max(64),
@@ -181,6 +207,7 @@ export interface DashboardSummary {
   windowStart: string;
   windowEnd: string;
   timezone: string;
+  anchorDate: string;
   currentBucketIndex: number;
   overall: {
     requests: number;

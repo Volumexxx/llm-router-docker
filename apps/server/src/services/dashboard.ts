@@ -56,6 +56,7 @@ interface DashboardWindow {
   labels: string[];
   currentBucketIndex: number;
   startParts: ZonedDateTimeParts;
+  anchorDate: string;
 }
 
 const HOUR_MS = 60 * 60 * 1000;
@@ -192,24 +193,49 @@ function formatMonthDay(parts: ZonedDateTimeParts): string {
   return `${String(parts.month).padStart(2, "0")}-${String(parts.day).padStart(2, "0")}`;
 }
 
+function formatDashboardDate(parts: Pick<ZonedDateTimeParts, "year" | "month" | "day">): string {
+  return `${String(parts.year).padStart(4, "0")}-${String(parts.month).padStart(2, "0")}-${String(parts.day).padStart(2, "0")}`;
+}
+
+function parseDashboardDate(value: string): Pick<ZonedDateTimeParts, "year" | "month" | "day"> {
+  const [year, month, day] = value.split("-").map((part) => Number(part));
+
+  return {
+    year,
+    month,
+    day
+  };
+}
+
 function buildDashboardWindow(
   range: DashboardRange,
   timezoneInput: string,
-  now = new Date()
+  now = new Date(),
+  anchorDate?: string
 ): DashboardWindow {
   const timezone = normalizeTimezone(timezoneInput);
   const nowParts = readZonedParts(now, timezone);
+  const currentAnchorDate = formatDashboardDate(nowParts);
 
   if (range === "day") {
-    const startParts = startOfZonedDay(nowParts);
-    const nextStartParts = addUtcDays(startParts, 1);
+    const anchorParts = anchorDate
+      ? {
+          ...parseDashboardDate(anchorDate),
+          hour: 0,
+          minute: 0,
+          second: 0
+        }
+      : startOfZonedDay(nowParts);
+    const resolvedAnchorDate = formatDashboardDate(anchorParts);
+    const nextStartParts = addUtcDays(anchorParts, 1);
 
     return {
-      start: zonedTimeToUtc(startParts, timezone),
+      start: zonedTimeToUtc(anchorParts, timezone),
       end: new Date(zonedTimeToUtc(nextStartParts, timezone).getTime() - 1),
       labels: Array.from({ length: 24 }, (_, index) => `${String(index).padStart(2, "0")}:00`),
-      currentBucketIndex: nowParts.hour,
-      startParts
+      currentBucketIndex: resolvedAnchorDate === currentAnchorDate ? nowParts.hour : 23,
+      startParts: anchorParts,
+      anchorDate: resolvedAnchorDate
     };
   }
 
@@ -225,7 +251,8 @@ function buildDashboardWindow(
       end: new Date(zonedTimeToUtc(nextStartParts, timezone).getTime() - 1),
       labels,
       currentBucketIndex: daysSinceMonday,
-      startParts
+      startParts,
+      anchorDate: currentAnchorDate
     };
   }
 
@@ -254,7 +281,8 @@ function buildDashboardWindow(
     end: new Date(zonedTimeToUtc(nextStartParts, timezone).getTime() - 1),
     labels,
     currentBucketIndex: nowParts.day - 1,
-    startParts
+    startParts,
+    anchorDate: currentAnchorDate
   };
 }
 
@@ -398,10 +426,11 @@ export function buildDashboardSummary(
   sqlite: DatabaseSync,
   range: DashboardRange,
   timezoneInput = "UTC",
-  now = new Date()
+  now = new Date(),
+  anchorDate?: string
 ): DashboardSummary {
   const timezone = normalizeTimezone(timezoneInput);
-  const window = buildDashboardWindow(range, timezone, now);
+  const window = buildDashboardWindow(range, timezone, now, anchorDate);
   const rows = queryInferenceAuditRows(sqlite, window.start.toISOString(), window.end.toISOString()).map((row) =>
     toAuditMetricRow(row)
   );
@@ -479,6 +508,7 @@ export function buildDashboardSummary(
     windowStart: window.start.toISOString(),
     windowEnd: window.end.toISOString(),
     timezone,
+    anchorDate: window.anchorDate,
     currentBucketIndex: window.currentBucketIndex,
     overall: {
       requests: successes + failures,

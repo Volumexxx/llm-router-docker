@@ -405,7 +405,9 @@ textarea:focus {
 
 .binding-order-controls,
 .binding-actions,
-.scope-card-actions {
+.scope-card-actions,
+.dashboard-day-controls,
+.provider-secret-actions {
   display: flex;
   align-items: center;
   gap: 10px;
@@ -414,6 +416,25 @@ textarea:focus {
 .binding-order-controls,
 .binding-actions {
   flex-wrap: nowrap;
+}
+
+.dashboard-day-controls {
+  position: relative;
+}
+
+.provider-secret-actions {
+  flex-wrap: wrap;
+}
+
+.dashboard-date-input {
+  position: absolute;
+  inline-size: 1px;
+  block-size: 1px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  opacity: 0;
+  overflow: hidden;
 }
 
 .binding-order-controls .chip,
@@ -632,6 +653,11 @@ tbody tr:hover {
   overflow-wrap: anywhere;
   border: 1px dashed rgba(62, 203, 255, 0.36);
   background: rgba(2, 11, 20, 0.72);
+}
+
+.provider-danger-panel {
+  border-color: rgba(255, 125, 157, 0.22);
+  background: linear-gradient(180deg, rgba(40, 11, 22, 0.7), rgba(12, 9, 16, 0.9));
 }
 
 .pagination {

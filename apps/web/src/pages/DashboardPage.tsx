@@ -1,9 +1,10 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 
 import { Modal } from "../components/Modal.tsx";
 import { TrendChart } from "../components/TrendChart.tsx";
 import type { DashboardCard, DashboardSummary, TrendPoint } from "../lib/api.ts";
 import {
+  formatDate,
   formatCost,
   formatDateTime,
   formatDuration,
@@ -15,6 +16,7 @@ interface DashboardPageProps {
   dashboard: DashboardSummary | null;
   range: "day" | "week" | "month";
   setRange: (range: "day" | "week" | "month") => void;
+  setDayDate: (date: string) => void;
 }
 
 type DashboardTabId = "provider" | "model" | "apiKey";
@@ -176,7 +178,7 @@ function nextSortState(current: SortState, key: SortKey): SortState {
   };
 }
 
-export function DashboardPage({ dashboard, range, setRange }: DashboardPageProps) {
+export function DashboardPage({ dashboard, range, setRange, setDayDate }: DashboardPageProps) {
   const [activeTab, setActiveTab] = useState<DashboardTabId>("provider");
   const [sortStateByTab, setSortStateByTab] = useState<Record<DashboardTabId, SortState>>({
     provider: { key: "requests", direction: "desc" },
@@ -184,9 +186,14 @@ export function DashboardPage({ dashboard, range, setRange }: DashboardPageProps
     apiKey: { key: "requests", direction: "desc" }
   });
   const [chartState, setChartState] = useState<ChartState | null>(null);
+  const dayPickerRef = useRef<HTMLInputElement | null>(null);
 
   const currentTab = dashboardTabs.find((item) => item.id === activeTab) ?? dashboardTabs[0];
   const currentSort = sortStateByTab[activeTab];
+  const zonedToday = useMemo(
+    () => formatDate(new Date(), dashboard?.timezone),
+    [dashboard?.timezone]
+  );
 
   const sortedRows = useMemo(() => {
     if (!dashboard) {
@@ -219,6 +226,22 @@ export function DashboardPage({ dashboard, range, setRange }: DashboardPageProps
       ...current,
       [activeTab]: nextSortState(current[activeTab], key)
     }));
+  };
+
+  const openDayPicker = () => {
+    const input = dayPickerRef.current;
+    if (!input) {
+      return;
+    }
+
+    const pickerInput = input as HTMLInputElement & { showPicker?: () => void };
+    if (typeof pickerInput.showPicker === "function") {
+      pickerInput.showPicker();
+      return;
+    }
+
+    input.focus();
+    input.click();
   };
 
   const openSingleMetricChart = (card: DashboardCard, metricKey: MetricKey) => {
@@ -295,6 +318,32 @@ export function DashboardPage({ dashboard, range, setRange }: DashboardPageProps
                 {value === "day" ? "Day" : value === "week" ? "Week" : "Month"}
               </button>
             ))}
+            {range === "day" ? (
+              <div className="dashboard-day-controls">
+                <input
+                  ref={dayPickerRef}
+                  type="date"
+                  className="dashboard-date-input"
+                  aria-label="选择日期"
+                  tabIndex={-1}
+                  value={dashboard.anchorDate}
+                  max={zonedToday}
+                  onChange={(event) => {
+                    if (event.target.value) {
+                      setDayDate(event.target.value);
+                    }
+                  }}
+                />
+                <button type="button" className="chip" onClick={openDayPicker}>
+                  日期
+                </button>
+                {dashboard.anchorDate !== zonedToday ? (
+                  <button type="button" className="chip" onClick={() => setDayDate(zonedToday)}>
+                    今天
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
           </div>
         </div>
 

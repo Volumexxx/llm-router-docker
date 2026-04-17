@@ -33,6 +33,14 @@ export interface ProviderWithSecret extends ProviderRecord {
   apiKey: string;
 }
 
+export interface ProviderDeleteResult {
+  success: true;
+  providerId: string;
+  providerName: string;
+  removedBindingCount: number;
+  affectedModelCount: number;
+}
+
 function sanitizeProviderRow(
   row:
     | {
@@ -253,6 +261,66 @@ export function updateProvider(
 
   const { apiKey, ...sanitized } = updated;
   return sanitized;
+}
+
+export function deleteProvider(sqlite: DatabaseSync, providerId: string): ProviderDeleteResult | null {
+  const provider = sqlite
+    .prepare(
+      `
+        SELECT id, name
+        FROM providers
+        WHERE id = ?
+        LIMIT 1
+      `
+    )
+    .get(providerId) as
+    | {
+        id: string;
+        name: string;
+      }
+    | undefined;
+
+  if (!provider) {
+    return null;
+  }
+
+  const impact = sqlite
+    .prepare(
+      `
+        SELECT
+          COUNT(*) AS binding_count,
+          COUNT(DISTINCT model_alias_id) AS model_count
+        FROM model_bindings
+        WHERE provider_id = ?
+      `
+    )
+    .get(providerId) as {
+    binding_count: number;
+    model_count: number;
+  };
+
+  try {
+    sqlite.exec("BEGIN");
+    sqlite.prepare("DELETE FROM model_bindings WHERE provider_id = ?").run(providerId);
+
+    const deletedProvider = sqlite.prepare("DELETE FROM providers WHERE id = ?").run(providerId);
+    if (deletedProvider.changes === 0) {
+      throw new Error("Provider was not deleted");
+    }
+
+    sqlite.exec("COMMIT");
+  } catch (error) {
+    sqlite.exec("ROLLBACK");
+    throw error;
+  }
+
+  return {
+    success: true,
+    providerId: provider.id,
+    providerName: provider.name,
+    removedBindingCount: Number(impact.binding_count),
+    affectedModelCount: Number(impact.model_count)
+  };
 }
 
 export function isSqliteUniqueConstraintError(error: unknown): boolean {
