@@ -418,6 +418,20 @@ textarea:focus {
   flex-wrap: nowrap;
 }
 
+.dashboard-hero-head {
+  gap: 12px;
+}
+
+.dashboard-range-controls {
+  justify-content: flex-end;
+}
+
+.dashboard-day-subrow {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 8px;
+}
+
 .dashboard-day-controls {
   position: relative;
 }

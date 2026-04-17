@@ -106,7 +106,7 @@ describe("DashboardPage", () => {
     }
   });
 
-  it("renders window boundaries using dashboard timezone and forwards current bucket selection", async () => {
+  it("renders window boundaries using dashboard timezone and keeps day controls in a secondary row", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-04-15T03:22:03.000Z"));
     const dashboard = buildDashboard();
@@ -125,6 +125,11 @@ describe("DashboardPage", () => {
     expect(view.container.textContent).toContain("2026/4/15 23:59:59");
     expect(getButtonsByText(view.container, "今天")).toHaveLength(0);
     expect(getButtonByText(view.container, "日期")).toBeTruthy();
+    expect(view.container.querySelector(".dashboard-range-controls")?.textContent).toContain("Day");
+    expect(view.container.querySelector(".dashboard-range-controls")?.textContent).toContain("Week");
+    expect(view.container.querySelector(".dashboard-range-controls")?.textContent).toContain("Month");
+    expect(view.container.querySelector(".dashboard-range-controls")?.textContent).not.toContain("日期");
+    expect(view.container.querySelector(".dashboard-day-subrow")?.textContent).toContain("日期");
 
     const metricButtons = view.container.querySelectorAll(".table-value-button");
     expect(metricButtons.length).toBeGreaterThan(0);
@@ -135,7 +140,7 @@ describe("DashboardPage", () => {
     expect(trendChartSpy.mock.calls.at(-1)?.[0]?.defaultSelectedIndex).toBe(11);
   });
 
-  it("shows day-only date controls and lets users jump between historical dates and today", async () => {
+  it("shows day-only date controls in a secondary row and lets users jump between historical dates and today", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-04-15T03:22:03.000Z"));
     const setDayDate = vi.fn();
@@ -155,8 +160,14 @@ describe("DashboardPage", () => {
     );
     activeRenders.push(view);
 
+    const rangeControls = view.container.querySelector(".dashboard-range-controls");
+    const daySubrow = view.container.querySelector(".dashboard-day-subrow");
     const dateInput = view.container.querySelector('input[type="date"]');
+    expect(rangeControls).not.toBeNull();
+    expect(daySubrow).not.toBeNull();
     expect(dateInput).toBeInstanceOf(HTMLInputElement);
+    expect(rangeControls?.contains(dateInput)).toBe(false);
+    expect(daySubrow?.contains(dateInput)).toBe(true);
 
     const showPickerSpy = vi.fn();
     Object.defineProperty(dateInput as HTMLInputElement, "showPicker", {
@@ -195,7 +206,7 @@ describe("DashboardPage", () => {
     expect(getButtonsByText(view.container, "今天")).toHaveLength(0);
   });
 
-  it("only renders date controls in the day range", async () => {
+  it("only renders the secondary day controls in the day range", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-04-15T03:22:03.000Z"));
     const view = await render(
@@ -214,5 +225,6 @@ describe("DashboardPage", () => {
     expect(getButtonsByText(view.container, "日期")).toHaveLength(0);
     expect(getButtonsByText(view.container, "今天")).toHaveLength(0);
     expect(view.container.querySelector('input[type="date"]')).toBeNull();
+    expect(view.container.querySelector(".dashboard-day-subrow")).toBeNull();
   });
 });

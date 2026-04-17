@@ -297,8 +297,9 @@ export function DashboardPage({ dashboard, range, setRange, setDayDate }: Dashbo
   return (
     <div className="stack">
       <section className="panel hero-panel">
-        <div className="toolbar cluster-between">
-          <div className="stack compact-stack">
+        <div className="stack dashboard-hero-head">
+          <div className="toolbar cluster-between">
+            <div className="stack compact-stack">
             <p className="eyebrow">Metrics Command Center</p>
             <h3>运行指标总览</h3>
             <p className="muted">
@@ -307,7 +308,7 @@ export function DashboardPage({ dashboard, range, setRange, setDayDate }: Dashbo
             </p>
           </div>
 
-          <div className="toolbar">
+          <div className="toolbar dashboard-range-controls">
             {(["day", "week", "month"] as const).map((value) => (
               <button
                 key={value}
@@ -318,7 +319,12 @@ export function DashboardPage({ dashboard, range, setRange, setDayDate }: Dashbo
                 {value === "day" ? "Day" : value === "week" ? "Week" : "Month"}
               </button>
             ))}
-            {range === "day" ? (
+          </div>
+
+          </div>
+
+          {range === "day" ? (
+            <div className="dashboard-day-subrow">
               <div className="dashboard-day-controls">
                 <input
                   ref={dayPickerRef}
@@ -343,8 +349,8 @@ export function DashboardPage({ dashboard, range, setRange, setDayDate }: Dashbo
                   </button>
                 ) : null}
               </div>
-            ) : null}
-          </div>
+            </div>
+          ) : null}
         </div>
 
         <div className="metric-grid">

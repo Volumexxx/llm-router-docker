@@ -466,16 +466,18 @@ export function buildDashboardSummary(
     const latency = row.latency_ms ?? 0;
     const tokens = getDisplayTokens(row);
     const cost = row.estimated_cost ?? 0;
-    const providerLabel = row.provider_name ?? "Unknown Provider";
+    const providerLabel = row.provider_name?.trim() || null;
     const modelLabel = row.model_alias ?? "Unknown Model";
     const apiKeyLabel = formatApiKeyLabel(row.api_key_name, row.api_key_masked_preview);
     const apiKeyGroupKey = row.api_key_id ?? `${row.api_key_name ?? ""}:${row.api_key_masked_preview ?? ""}`;
 
     accumulateBucket(overallBuckets[index], isSuccess, latency, tokens, cost);
 
-    const providerBucketList = providerBuckets.get(providerLabel) ?? makeBuckets(window.labels);
-    accumulateBucket(providerBucketList[index], isSuccess, latency, tokens, cost);
-    providerBuckets.set(providerLabel, providerBucketList);
+    if (providerLabel) {
+      const providerBucketList = providerBuckets.get(providerLabel) ?? makeBuckets(window.labels);
+      accumulateBucket(providerBucketList[index], isSuccess, latency, tokens, cost);
+      providerBuckets.set(providerLabel, providerBucketList);
+    }
 
     const modelBucketList = modelBuckets.get(modelLabel) ?? makeBuckets(window.labels);
     accumulateBucket(modelBucketList[index], isSuccess, latency, tokens, cost);

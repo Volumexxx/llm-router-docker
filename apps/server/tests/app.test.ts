@@ -106,12 +106,12 @@ function insertAuditRow(
       input.occurredAt,
       input.endpointType ?? "chat_completions",
       null,
-      input.providerName ?? "test-provider",
-      input.modelAlias ?? "test-model",
-      input.modelAlias ?? "test-upstream",
-      input.apiKeyId ?? "test-api-key-id",
-      input.apiKeyName ?? "test-api-key",
-      input.apiKeyMaskedPreview ?? "lrk***123",
+      input.providerName === undefined ? "test-provider" : input.providerName,
+      input.modelAlias === undefined ? "test-model" : input.modelAlias,
+      input.modelAlias === undefined ? "test-upstream" : input.modelAlias,
+      input.apiKeyId === undefined ? "test-api-key-id" : input.apiKeyId,
+      input.apiKeyName === undefined ? "test-api-key" : input.apiKeyName,
+      input.apiKeyMaskedPreview === undefined ? "lrk***123" : input.apiKeyMaskedPreview,
       0,
       input.statusCategory ?? "success",
       200,
@@ -1875,6 +1875,46 @@ describe("llm router server", () => {
       expect(response.json().overall.totalTokens).toBe(44);
       expect(response.json().trend[0].requests).toBe(1);
       expect(response.json().trend[23].requests).toBe(1);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("excludes unrouted inference errors from provider dashboard cards while keeping them in overall totals", async () => {
+    const app = await createTestApp(undefined, undefined, {
+      TIMEZONE: "Asia/Shanghai"
+    });
+
+    try {
+      insertAuditRow(app, {
+        occurredAt: "2026-04-15T02:15:00.000Z",
+        providerName: null,
+        modelAlias: "missing-model",
+        statusCategory: "configuration_error",
+        inputTokens: null,
+        outputTokens: null,
+        totalTokens: null
+      });
+      insertAuditRow(app, {
+        occurredAt: "2026-04-15T03:15:00.000Z",
+        providerName: "provider-a",
+        modelAlias: "router-a",
+        inputTokens: 12,
+        outputTokens: 4,
+        totalTokens: 16
+      });
+
+      const summary = buildDashboardSummary(
+        app.appCtx.database.sqlite,
+        "day",
+        "Asia/Shanghai",
+        new Date("2026-04-15T03:22:03.000Z")
+      );
+
+      expect(summary.overall.requests).toBe(2);
+      expect(summary.providerCards).toHaveLength(1);
+      expect(summary.providerCards[0]?.label).toBe("provider-a");
+      expect(summary.providerCards.some((card) => card.label === "Unknown Provider")).toBe(false);
     } finally {
       await app.close();
     }

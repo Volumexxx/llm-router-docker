@@ -296,7 +296,7 @@ export function ProvidersPage({
           <div className="stack compact-stack">
             <h3>Provider 管理</h3>
             <p className="muted">
-              列表页只���留摘要信息，点击“配置”进入右侧抽屉编辑、测试连通性或删除 Provider。
+              列表页只保留摘要信息，点击“配置”进入右侧抽屉编辑、测试连通性或删除 Provider。
             </p>
           </div>
           <span className="pill">{providers.length} 个 Provider</span>
@@ -622,8 +622,7 @@ export function ProvidersPage({
               </div>
 
               <p className="feedback warning">
-                这次删除将移除 {selectedImpact.bindingCount} 条 binding，影响 {selectedImpact.modelCount}{" "}
-                个模型。
+                这次删除将移除 {selectedImpact.bindingCount} 条 binding，影响 {selectedImpact.modelCount} 个模型。
               </p>
 
               <label>
