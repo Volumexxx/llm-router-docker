@@ -674,6 +674,16 @@ tbody tr:hover {
   background: linear-gradient(180deg, rgba(40, 11, 22, 0.7), rgba(12, 9, 16, 0.9));
 }
 
+.protocol-config-panel {
+  border-color: rgba(98, 166, 255, 0.24);
+}
+
+.protocol-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
 .pagination {
   justify-content: space-between;
   margin-top: 18px;

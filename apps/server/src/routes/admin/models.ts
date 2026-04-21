@@ -11,6 +11,7 @@ import { sendJsonError, sendValidationError } from "../../lib/http.ts";
 import { enforceAdminIpAllowlist, requireAdminSession } from "../../security/auth.ts";
 import {
   applyRuntimeOrder,
+  BindingProtocolConfigMissingError,
   createBinding,
   createModelAlias,
   deleteBinding,
@@ -25,9 +26,10 @@ import { isSqliteUniqueConstraintError } from "../../services/providers.ts";
 
 function hasExactModelBindings(
   model: NonNullable<ReturnType<typeof getModelById>>,
+  protocol: "openai" | "anthropic",
   bindingIds: string[]
 ): boolean {
-  const modelBindingIds = model.bindings.map((binding) => binding.id).sort();
+  const modelBindingIds = model.bindings[protocol].map((binding) => binding.id).sort();
   const requestedIds = [...bindingIds].sort();
 
   return (
@@ -54,7 +56,7 @@ export async function registerAdminModelRoutes(app: FastifyInstance): Promise<vo
       }
 
       if (isSqliteUniqueConstraintError(error)) {
-        sendJsonError(reply, 409, "model_alias_conflict", "模型别名已存在");
+        sendJsonError(reply, 409, "model_alias_conflict", "Model alias already exists");
         return;
       }
 
@@ -69,7 +71,7 @@ export async function registerAdminModelRoutes(app: FastifyInstance): Promise<vo
       const item = updateModelAlias(request.server.appCtx.database.sqlite, modelId, input);
 
       if (!item) {
-        sendJsonError(reply, 404, "model_not_found", "模型不存在");
+        sendJsonError(reply, 404, "model_not_found", "Model not found");
         return;
       }
 
@@ -80,7 +82,7 @@ export async function registerAdminModelRoutes(app: FastifyInstance): Promise<vo
       }
 
       if (isSqliteUniqueConstraintError(error)) {
-        sendJsonError(reply, 409, "model_alias_conflict", "模型别名已存在");
+        sendJsonError(reply, 409, "model_alias_conflict", "Model alias already exists");
         return;
       }
 
@@ -93,7 +95,7 @@ export async function registerAdminModelRoutes(app: FastifyInstance): Promise<vo
     const deleted = deleteModelAlias(request.server.appCtx.database.sqlite, modelId);
 
     if (!deleted) {
-      sendJsonError(reply, 404, "model_not_found", "模型不存在");
+      sendJsonError(reply, 404, "model_not_found", "Model not found");
       return;
     }
 
@@ -110,7 +112,7 @@ export async function registerAdminModelRoutes(app: FastifyInstance): Promise<vo
         const item = createBinding(request.server.appCtx.database.sqlite, modelId, input);
 
         if (!item) {
-          sendJsonError(reply, 404, "model_not_found", "模型不存在");
+          sendJsonError(reply, 404, "model_not_found", "Model not found");
           return;
         }
 
@@ -120,8 +122,23 @@ export async function registerAdminModelRoutes(app: FastifyInstance): Promise<vo
           return;
         }
 
+        if (error instanceof BindingProtocolConfigMissingError) {
+          sendJsonError(
+            reply,
+            400,
+            "provider_protocol_config_missing",
+            `${error.protocol} is not configured for provider ${error.providerId}`
+          );
+          return;
+        }
+
         if (isSqliteUniqueConstraintError(error)) {
-          sendJsonError(reply, 409, "binding_conflict", "同一个模型下的 Provider 绑定不能重复");
+          sendJsonError(
+            reply,
+            409,
+            "binding_conflict",
+            "The same provider cannot be bound more than once within the same protocol"
+          );
           return;
         }
 
@@ -140,7 +157,7 @@ export async function registerAdminModelRoutes(app: FastifyInstance): Promise<vo
         const item = updateBinding(request.server.appCtx.database.sqlite, modelId, bindingId, input);
 
         if (!item) {
-          sendJsonError(reply, 404, "binding_not_found", "模型绑定不存在");
+          sendJsonError(reply, 404, "binding_not_found", "Model binding not found");
           return;
         }
 
@@ -163,7 +180,7 @@ export async function registerAdminModelRoutes(app: FastifyInstance): Promise<vo
       const deleted = deleteBinding(request.server.appCtx.database.sqlite, modelId, bindingId);
 
       if (!deleted) {
-        sendJsonError(reply, 404, "binding_not_found", "模型绑定不存在");
+        sendJsonError(reply, 404, "binding_not_found", "Model binding not found");
         return;
       }
 
@@ -181,16 +198,26 @@ export async function registerAdminModelRoutes(app: FastifyInstance): Promise<vo
         const model = getModelById(request.server.appCtx.database.sqlite, modelId);
 
         if (!model) {
-          sendJsonError(reply, 404, "model_not_found", "模型不存在");
+          sendJsonError(reply, 404, "model_not_found", "Model not found");
           return;
         }
 
-        if (!hasExactModelBindings(model, input.bindingIds)) {
-          sendJsonError(reply, 400, "binding_order_invalid", "运行时顺序必须包含该模型的全部绑定");
+        if (!hasExactModelBindings(model, input.protocol, input.bindingIds)) {
+          sendJsonError(
+            reply,
+            400,
+            "binding_order_invalid",
+            "Runtime order must include every binding for the selected protocol"
+          );
           return;
         }
 
-        const item = applyRuntimeOrder(request.server.appCtx.database.sqlite, modelId, input.bindingIds);
+        const item = applyRuntimeOrder(
+          request.server.appCtx.database.sqlite,
+          modelId,
+          input.protocol,
+          input.bindingIds
+        );
         reply.send({ item });
       } catch (error) {
         if (sendValidationError(reply, error)) {
@@ -212,16 +239,16 @@ export async function registerAdminModelRoutes(app: FastifyInstance): Promise<vo
         const model = getModelById(request.server.appCtx.database.sqlite, modelId);
 
         if (!model) {
-          sendJsonError(reply, 404, "model_not_found", "Model alias does not exist");
+          sendJsonError(reply, 404, "model_not_found", "Model not found");
           return;
         }
 
-        if (!hasExactModelBindings(model, input.bindingIds)) {
+        if (!hasExactModelBindings(model, input.protocol, input.bindingIds)) {
           sendJsonError(
             reply,
             400,
             "binding_order_invalid",
-            "Default order must include every binding for the selected model"
+            "Default order must include every binding for the selected protocol"
           );
           return;
         }
@@ -229,6 +256,7 @@ export async function registerAdminModelRoutes(app: FastifyInstance): Promise<vo
         const item = saveRuntimeOrderAsDefault(
           request.server.appCtx.database.sqlite,
           modelId,
+          input.protocol,
           input.bindingIds
         );
 

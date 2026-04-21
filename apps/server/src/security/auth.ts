@@ -109,6 +109,40 @@ export function requireGatewayApiKeyHeader(request: FastifyRequest): string | nu
   return header.trim() || null;
 }
 
+function normalizeGatewayTokenHeaderValue(value: string | undefined): string | null {
+  if (!value) {
+    return null;
+  }
+
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  if (trimmed.startsWith("Bearer ")) {
+    return trimmed.slice("Bearer ".length).trim() || null;
+  }
+
+  return trimmed;
+}
+
+export function requireGatewayAnthropicToken(request: FastifyRequest): string | null {
+  const apiKeyHeader = requireGatewayApiKeyHeader(request);
+  if (apiKeyHeader) {
+    return apiKeyHeader;
+  }
+
+  const proxyAuthorization = request.headers["proxy-authorization"];
+  if (typeof proxyAuthorization === "string") {
+    const proxyToken = normalizeGatewayTokenHeaderValue(proxyAuthorization);
+    if (proxyToken) {
+      return proxyToken;
+    }
+  }
+
+  return normalizeGatewayTokenHeaderValue(request.headers.authorization);
+}
+
 export function rejectGatewayRequest(
   request: FastifyRequest,
   reply: FastifyReply,

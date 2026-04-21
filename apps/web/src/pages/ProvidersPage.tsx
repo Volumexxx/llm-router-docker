@@ -1,25 +1,39 @@
-import { useEffect, useMemo, useState, type Dispatch, type SetStateAction } from "react";
+import { useMemo, useState } from "react";
 
 import { Drawer } from "../components/Drawer.tsx";
-import { api, type ModelItem, type ProviderItem, type ProviderPayload } from "../lib/api.ts";
+import { Modal } from "../components/Modal.tsx";
+import {
+  api,
+  type AnthropicProviderConfigPayload,
+  type AnthropicProviderConfigUpdatePayload,
+  type ModelItem,
+  type OpenAiProviderConfigPayload,
+  type OpenAiProviderConfigUpdatePayload,
+  type ProviderItem,
+  type ProviderPayload,
+  type ProviderProtocol,
+  type ProviderUpdatePayload
+} from "../lib/api.ts";
 
 const ANTHROPIC_DEFAULT_API_VERSION = "2023-06-01";
 
-type ProviderDraft = Omit<ProviderPayload, "apiKey"> & {
+type ProviderProtocolDraft = {
+  baseUrl: string;
+  apiKey: string;
+  testTimeoutMs: number;
   apiVersion: string | null;
 };
 
-type ProviderImpact = {
-  bindingCount: number;
-  enabledBindingCount: number;
-  modelCount: number;
+type ProviderDraft = {
+  name: string;
+  enabled: boolean;
+  openai: ProviderProtocolDraft;
+  anthropic: ProviderProtocolDraft;
 };
 
 interface ProvidersPageProps {
   providers: ProviderItem[];
   models: ModelItem[];
-  newProvider: ProviderPayload;
-  setNewProvider: Dispatch<SetStateAction<ProviderPayload>>;
   refreshProviders: () => Promise<void>;
   refreshModels: () => Promise<void>;
   refreshApiKeys: () => Promise<void>;
@@ -27,133 +41,417 @@ interface ProvidersPageProps {
   onError: (reason: unknown) => void;
 }
 
-function getCreatePlaceholder(protocol: ProviderPayload["protocol"]): string {
-  return protocol === "anthropic" ? "https://api.anthropic.com" : "https://api.openai.com/v1";
-}
+type ProviderImpact = {
+  bindingCount: number;
+  enabledBindingCount: number;
+  modelCount: number;
+};
 
-function getProtocolLabel(protocol: ProviderPayload["protocol"]): string {
-  return protocol === "anthropic" ? "Anthropic / Claude" : "OpenAI Compatible";
-}
+const emptyProtocolDraft = (): ProviderProtocolDraft => ({
+  baseUrl: "",
+  apiKey: "",
+  testTimeoutMs: 10000,
+  apiVersion: ANTHROPIC_DEFAULT_API_VERSION
+});
+
+const emptyProviderDraft = (): ProviderDraft => ({
+  name: "",
+  enabled: true,
+  openai: emptyProtocolDraft(),
+  anthropic: emptyProtocolDraft()
+});
 
 function buildProviderDraft(provider: ProviderItem): ProviderDraft {
   return {
     name: provider.name,
-    baseUrl: provider.baseUrl,
-    protocol: provider.protocol,
-    apiVersion:
-      provider.protocol === "anthropic"
-        ? (provider.apiVersion ?? ANTHROPIC_DEFAULT_API_VERSION)
-        : null,
     enabled: provider.enabled,
-    testTimeoutMs: provider.testTimeoutMs
+    openai: {
+      baseUrl: provider.openaiConfig?.baseUrl ?? "",
+      apiKey: "",
+      testTimeoutMs: provider.openaiConfig?.testTimeoutMs ?? 10000,
+      apiVersion: null
+    },
+    anthropic: {
+      baseUrl: provider.anthropicConfig?.baseUrl ?? "",
+      apiKey: "",
+      testTimeoutMs: provider.anthropicConfig?.testTimeoutMs ?? 10000,
+      apiVersion: provider.anthropicConfig?.apiVersion ?? ANTHROPIC_DEFAULT_API_VERSION
+    }
   };
 }
 
-function getEmptyImpact(): ProviderImpact {
+function getProtocolLabel(protocol: ProviderProtocol): string {
+  return protocol === "anthropic" ? "Anthropic" : "OpenAI";
+}
+
+function getConfiguredSummary(provider: ProviderItem): string {
+  if (provider.openaiConfig && provider.anthropicConfig) {
+    return "已配置 OpenAI / Anthropic";
+  }
+
+  if (provider.anthropicConfig) {
+    return "仅 Anthropic";
+  }
+
+  if (provider.openaiConfig) {
+    return "仅 OpenAI";
+  }
+
+  return "未配置协议";
+}
+
+function getProviderImpact(models: ModelItem[], providerId: string): ProviderImpact {
+  let bindingCount = 0;
+  let enabledBindingCount = 0;
+  let modelCount = 0;
+
+  for (const model of models) {
+    const bindings = [...model.bindings.openai, ...model.bindings.anthropic];
+    const matched = bindings.filter((binding) => binding.providerId === providerId);
+    if (matched.length === 0) {
+      continue;
+    }
+
+    bindingCount += matched.length;
+    enabledBindingCount += matched.filter((binding) => binding.enabled).length;
+    modelCount += 1;
+  }
+
   return {
-    bindingCount: 0,
-    enabledBindingCount: 0,
-    modelCount: 0
+    bindingCount,
+    enabledBindingCount,
+    modelCount
   };
+}
+
+function hasAnyProtocolInput(draft: ProviderProtocolDraft): boolean {
+  return Boolean(draft.baseUrl.trim() || draft.apiKey.trim());
+}
+
+function assertProtocolNameAndConfig(protocol: ProviderProtocol, draft: ProviderProtocolDraft): void {
+  if (!draft.baseUrl.trim()) {
+    throw new Error(`${getProtocolLabel(protocol)} 接口地址不能为空。`);
+  }
+
+  if (!draft.apiKey.trim()) {
+    throw new Error(`${getProtocolLabel(protocol)} API Key 不能为空。`);
+  }
+}
+
+function buildOpenAiCreatePayload(
+  draft: ProviderProtocolDraft
+): OpenAiProviderConfigPayload | undefined {
+  if (!hasAnyProtocolInput(draft)) {
+    return undefined;
+  }
+
+  assertProtocolNameAndConfig("openai", draft);
+
+  return {
+    baseUrl: draft.baseUrl.trim(),
+    apiKey: draft.apiKey.trim(),
+    testTimeoutMs: draft.testTimeoutMs
+  };
+}
+
+function buildAnthropicCreatePayload(
+  draft: ProviderProtocolDraft
+): AnthropicProviderConfigPayload | undefined {
+  if (!hasAnyProtocolInput(draft)) {
+    return undefined;
+  }
+
+  assertProtocolNameAndConfig("anthropic", draft);
+
+  return {
+    baseUrl: draft.baseUrl.trim(),
+    apiKey: draft.apiKey.trim(),
+    testTimeoutMs: draft.testTimeoutMs,
+    apiVersion: draft.apiVersion?.trim() || ANTHROPIC_DEFAULT_API_VERSION
+  };
+}
+
+function buildOpenAiUpdatePayload(
+  draft: ProviderProtocolDraft,
+  hasExistingConfig: boolean
+): OpenAiProviderConfigUpdatePayload | undefined {
+  if (!hasExistingConfig && !hasAnyProtocolInput(draft)) {
+    return undefined;
+  }
+
+  if (!hasExistingConfig) {
+    assertProtocolNameAndConfig("openai", draft);
+    return {
+      baseUrl: draft.baseUrl.trim(),
+      apiKey: draft.apiKey.trim(),
+      testTimeoutMs: draft.testTimeoutMs
+    };
+  }
+
+  if (!draft.baseUrl.trim()) {
+    throw new Error("OpenAI 接口地址不能为空。");
+  }
+
+  return {
+    baseUrl: draft.baseUrl.trim(),
+    testTimeoutMs: draft.testTimeoutMs,
+    ...(draft.apiKey.trim() ? { apiKey: draft.apiKey.trim() } : {})
+  };
+}
+
+function buildAnthropicUpdatePayload(
+  draft: ProviderProtocolDraft,
+  hasExistingConfig: boolean
+): AnthropicProviderConfigUpdatePayload | undefined {
+  if (!hasExistingConfig && !hasAnyProtocolInput(draft)) {
+    return undefined;
+  }
+
+  if (!hasExistingConfig) {
+    assertProtocolNameAndConfig("anthropic", draft);
+    return {
+      baseUrl: draft.baseUrl.trim(),
+      apiKey: draft.apiKey.trim(),
+      testTimeoutMs: draft.testTimeoutMs,
+      apiVersion: draft.apiVersion?.trim() || ANTHROPIC_DEFAULT_API_VERSION
+    };
+  }
+
+  if (!draft.baseUrl.trim()) {
+    throw new Error("Anthropic 接口地址不能为空。");
+  }
+
+  return {
+    baseUrl: draft.baseUrl.trim(),
+    testTimeoutMs: draft.testTimeoutMs,
+    apiVersion: draft.apiVersion?.trim() || ANTHROPIC_DEFAULT_API_VERSION,
+    ...(draft.apiKey.trim() ? { apiKey: draft.apiKey.trim() } : {})
+  };
+}
+
+function ConfigSection({
+  title,
+  protocol,
+  draft,
+  configuredConfig,
+  allowEmpty = false,
+  onChange
+}: {
+  title: string;
+  protocol: ProviderProtocol;
+  draft: ProviderProtocolDraft;
+  configuredConfig: ProviderItem["openaiConfig"] | ProviderItem["anthropicConfig"] | null;
+  allowEmpty?: boolean;
+  onChange: (patch: Partial<ProviderProtocolDraft>) => void;
+}) {
+  return (
+    <section className="panel panel-elevated protocol-config-panel">
+      <div className="panel-head">
+        <div className="stack compact-stack">
+          <h4>{title}</h4>
+          <p className="muted">
+            {configuredConfig
+              ? "已配置，可更新接口地址、超时和 API Key；留空不会覆盖当前 Key。"
+              : allowEmpty
+                ? "可留空；创建时至少完整填写一个协议配置。"
+                : "当前未配置，保存后即可启用该协议。"}
+          </p>
+        </div>
+        <span className="pill">
+          {configuredConfig
+            ? configuredConfig.apiKeyPreview ?? "已配置"
+            : allowEmpty
+              ? "可留空"
+              : "未配置"}
+        </span>
+      </div>
+
+      <div className="form-grid">
+        <label>
+          <span>接口地址</span>
+          <input
+            value={draft.baseUrl}
+            onChange={(event) => onChange({ baseUrl: event.target.value })}
+            placeholder={protocol === "anthropic" ? "https://api.anthropic.com" : "https://api.openai.com/v1"}
+          />
+        </label>
+
+        <label>
+          <span>API Key</span>
+          <input
+            type="password"
+            autoComplete="new-password"
+            value={draft.apiKey}
+            onChange={(event) => onChange({ apiKey: event.target.value })}
+            placeholder="输入上游 API Key"
+          />
+        </label>
+
+        <label>
+          <span>测试超时 (ms)</span>
+          <input
+            type="number"
+            step="1000"
+            value={draft.testTimeoutMs}
+            onChange={(event) => onChange({ testTimeoutMs: Number(event.target.value) })}
+          />
+        </label>
+
+        {protocol === "anthropic" ? (
+          <label>
+            <span>Anthropic API Version</span>
+            <input
+              value={draft.apiVersion ?? ANTHROPIC_DEFAULT_API_VERSION}
+              onChange={(event) => onChange({ apiVersion: event.target.value })}
+              placeholder={ANTHROPIC_DEFAULT_API_VERSION}
+            />
+          </label>
+        ) : null}
+      </div>
+    </section>
+  );
 }
 
 export function ProvidersPage({
   providers,
   models,
-  newProvider,
-  setNewProvider,
   refreshProviders,
   refreshModels,
   refreshApiKeys,
   onNotice,
   onError
 }: ProvidersPageProps) {
+  const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
+  const [createDraft, setCreateDraft] = useState<ProviderDraft>(emptyProviderDraft);
   const [selectedProviderId, setSelectedProviderId] = useState<string | null>(null);
+  const [selectedProviderSnapshot, setSelectedProviderSnapshot] = useState<ProviderItem | null>(null);
   const [draft, setDraft] = useState<ProviderDraft | null>(null);
-  const [isReplacingKey, setIsReplacingKey] = useState(false);
-  const [replacementApiKey, setReplacementApiKey] = useState("");
   const [deleteConfirmation, setDeleteConfirmation] = useState("");
-  const [busyAction, setBusyAction] = useState<"save" | "test" | "delete" | null>(null);
+  const [busyAction, setBusyAction] = useState<string | null>(null);
 
-  const providerImpactMap = useMemo(() => {
-    const impactMap = new Map<
-      string,
-      {
-        bindingCount: number;
-        enabledBindingCount: number;
-        modelIds: Set<string>;
-      }
-    >();
+  const providerImpactMap = useMemo(
+    () => new Map(providers.map((provider) => [provider.id, getProviderImpact(models, provider.id)])),
+    [models, providers]
+  );
 
-    models.forEach((model) => {
-      model.bindings.forEach((binding) => {
-        const current = impactMap.get(binding.providerId) ?? {
-          bindingCount: 0,
-          enabledBindingCount: 0,
-          modelIds: new Set<string>()
-        };
-
-        current.bindingCount += 1;
-        current.enabledBindingCount += binding.enabled ? 1 : 0;
-        current.modelIds.add(model.id);
-        impactMap.set(binding.providerId, current);
-      });
-    });
-
-    return impactMap;
-  }, [models]);
-
-  const selectedProvider = useMemo(
+  const selectedProviderFromProps = useMemo(
     () => providers.find((provider) => provider.id === selectedProviderId) ?? null,
     [providers, selectedProviderId]
   );
 
-  const selectedImpact = useMemo(() => {
-    if (!selectedProvider) {
-      return getEmptyImpact();
-    }
+  const selectedProvider =
+    selectedProviderSnapshot?.id === selectedProviderId
+      ? selectedProviderSnapshot
+      : selectedProviderFromProps;
 
-    const impact = providerImpactMap.get(selectedProvider.id);
-    return impact
-      ? {
-          bindingCount: impact.bindingCount,
-          enabledBindingCount: impact.enabledBindingCount,
-          modelCount: impact.modelIds.size
-        }
-      : getEmptyImpact();
-  }, [providerImpactMap, selectedProvider]);
+  const selectedImpact = selectedProvider
+    ? (providerImpactMap.get(selectedProvider.id) ?? {
+        bindingCount: 0,
+        enabledBindingCount: 0,
+        modelCount: 0
+      })
+    : {
+        bindingCount: 0,
+        enabledBindingCount: 0,
+        modelCount: 0
+      };
 
-  useEffect(() => {
-    if (selectedProviderId && !selectedProvider) {
-      setSelectedProviderId(null);
-      setDraft(null);
-      setIsReplacingKey(false);
-      setReplacementApiKey("");
-      setDeleteConfirmation("");
-      setBusyAction(null);
-    }
-  }, [selectedProvider, selectedProviderId]);
+  const updateCreateDraftProtocol = (protocol: ProviderProtocol, patch: Partial<ProviderProtocolDraft>) => {
+    setCreateDraft((current) => ({
+      ...current,
+      [protocol]: {
+        ...current[protocol],
+        ...patch
+      }
+    }));
+  };
+
+  const updateDraftProtocol = (protocol: ProviderProtocol, patch: Partial<ProviderProtocolDraft>) => {
+    setDraft((current) =>
+      current
+        ? {
+            ...current,
+            [protocol]: {
+              ...current[protocol],
+              ...patch
+            }
+          }
+        : current
+    );
+  };
 
   const openProviderDrawer = (provider: ProviderItem) => {
     setSelectedProviderId(provider.id);
+    setSelectedProviderSnapshot(provider);
     setDraft(buildProviderDraft(provider));
-    setIsReplacingKey(false);
-    setReplacementApiKey("");
     setDeleteConfirmation("");
     setBusyAction(null);
   };
 
   const closeDrawer = () => {
     setSelectedProviderId(null);
+    setSelectedProviderSnapshot(null);
     setDraft(null);
-    setIsReplacingKey(false);
-    setReplacementApiKey("");
     setDeleteConfirmation("");
     setBusyAction(null);
   };
 
-  const updateDraft = (patch: Partial<ProviderDraft>) => {
-    setDraft((current) => (current ? { ...current, ...patch } : current));
+  const handleCreate = () => {
+    if (!createDraft.name.trim()) {
+      throw new Error("Provider 名称不能为空。");
+    }
+
+    const payload: ProviderPayload = {
+      name: createDraft.name.trim(),
+      enabled: createDraft.enabled,
+      openai: buildOpenAiCreatePayload(createDraft.openai),
+      anthropic: buildAnthropicCreatePayload(createDraft.anthropic)
+    };
+
+    if (!payload.openai && !payload.anthropic) {
+      throw new Error("至少需要完整填写一个协议配置。");
+    }
+
+    setBusyAction("create");
+    void api.providers
+      .create(payload)
+      .then(async () => {
+        setIsCreateModalOpen(false);
+        setCreateDraft(emptyProviderDraft());
+        await refreshProviders();
+        onNotice("Provider 已创建。");
+      })
+      .catch(onError)
+      .finally(() => setBusyAction(null));
+  };
+
+  const handleSave = (provider: ProviderItem, currentDraft: ProviderDraft) => {
+    if (!currentDraft.name.trim()) {
+      throw new Error("Provider 名称不能为空。");
+    }
+
+    const payload: ProviderUpdatePayload = {
+      name: currentDraft.name.trim(),
+      enabled: currentDraft.enabled,
+      openai: buildOpenAiUpdatePayload(currentDraft.openai, Boolean(provider.openaiConfig)),
+      anthropic: buildAnthropicUpdatePayload(currentDraft.anthropic, Boolean(provider.anthropicConfig))
+    };
+
+    if (!payload.openai && !payload.anthropic) {
+      throw new Error("至少保留一个协议配置。");
+    }
+
+    setBusyAction("save");
+    void api.providers
+      .update(provider.id, payload)
+      .then(async (response) => {
+        setSelectedProviderSnapshot(response.item);
+        setDraft(buildProviderDraft(response.item));
+        await Promise.all([refreshProviders(), refreshModels()]);
+        onNotice(`Provider ${response.item.name} 已保存。`);
+      })
+      .catch(onError)
+      .finally(() => setBusyAction(null));
   };
 
   return (
@@ -161,145 +459,21 @@ export function ProvidersPage({
       <section className="panel">
         <div className="panel-head">
           <div className="stack compact-stack">
-            <h3>新增 Provider</h3>
+            <h3>Provider 管理</h3>
             <p className="muted">
-              支持 OpenAI 兼容上游和 Anthropic / Claude 协议上游。Anthropic 建议直接填写
-              `https://api.anthropic.com`，系统会自动补全所需路径。
+              一个逻辑 Provider 下可以分别维护 OpenAI 与 Anthropic 两套连接配置，便于按协议独立路由。
             </p>
           </div>
-        </div>
-
-        <div className="form-grid">
-          <label>
-            <span>名称</span>
-            <input
-              value={newProvider.name}
-              onChange={(event) =>
-                setNewProvider((current) => ({ ...current, name: event.target.value }))
-              }
-              placeholder="例如：OpenAI / Claude / NAS Proxy"
-            />
-          </label>
-
-          <label>
-            <span>协议类型</span>
-            <select
-              value={newProvider.protocol}
-              onChange={(event) =>
-                setNewProvider((current) => ({
-                  ...current,
-                  protocol: event.target.value as "openai" | "anthropic",
-                  apiVersion:
-                    event.target.value === "anthropic"
-                      ? (current.apiVersion ?? ANTHROPIC_DEFAULT_API_VERSION)
-                      : null
-                }))
-              }
-            >
-              <option value="openai">OpenAI Compatible</option>
-              <option value="anthropic">Anthropic / Claude</option>
-            </select>
-          </label>
-
-          <label>
-            <span>接口地址</span>
-            <input
-              value={newProvider.baseUrl}
-              onChange={(event) =>
-                setNewProvider((current) => ({ ...current, baseUrl: event.target.value }))
-              }
-              placeholder={getCreatePlaceholder(newProvider.protocol)}
-            />
-          </label>
-
-          <label>
-            <span>真实 API Key</span>
-            <input
-              type="password"
-              value={newProvider.apiKey}
-              onChange={(event) =>
-                setNewProvider((current) => ({ ...current, apiKey: event.target.value }))
-              }
-            />
-          </label>
-
-          {newProvider.protocol === "anthropic" ? (
-            <label>
-              <span>Anthropic API Version</span>
-              <input
-                value={newProvider.apiVersion ?? ANTHROPIC_DEFAULT_API_VERSION}
-                onChange={(event) =>
-                  setNewProvider((current) => ({ ...current, apiVersion: event.target.value }))
-                }
-                placeholder={ANTHROPIC_DEFAULT_API_VERSION}
-              />
-            </label>
-          ) : null}
-
-          <label>
-            <span>测试超时(ms)</span>
-            <input
-              type="number"
-              step="1000"
-              value={newProvider.testTimeoutMs}
-              onChange={(event) =>
-                setNewProvider((current) => ({
-                  ...current,
-                  testTimeoutMs: Number(event.target.value)
-                }))
-              }
-            />
-          </label>
-        </div>
-
-        <label className="inline">
-          <input
-            type="checkbox"
-            checked={newProvider.enabled}
-            onChange={(event) =>
-              setNewProvider((current) => ({ ...current, enabled: event.target.checked }))
-            }
-          />
-          <span>创建后立即启用</span>
-        </label>
-
-        <div className="toolbar">
           <button
             type="button"
             className="primary"
             onClick={() => {
-              void api.providers
-                .create(newProvider)
-                .then(async () => {
-                  setNewProvider({
-                    name: "",
-                    baseUrl: "",
-                    apiKey: "",
-                    protocol: "openai",
-                    apiVersion: null,
-                    enabled: true,
-                    testTimeoutMs: 10000
-                  });
-                  await refreshProviders();
-                  onNotice("Provider 已创建。");
-                })
-                .catch(onError);
+              setCreateDraft(emptyProviderDraft());
+              setIsCreateModalOpen(true);
             }}
           >
-            创建 Provider
+            新增 Provider
           </button>
-        </div>
-      </section>
-
-      <section className="panel">
-        <div className="panel-head">
-          <div className="stack compact-stack">
-            <h3>Provider 管理</h3>
-            <p className="muted">
-              列表页只保留摘要信息，点击“配置”进入右侧抽屉编辑、测试连通性或删除 Provider。
-            </p>
-          </div>
-          <span className="pill">{providers.length} 个 Provider</span>
         </div>
 
         <div className="table-wrap">
@@ -307,9 +481,6 @@ export function ProvidersPage({
             <thead>
               <tr>
                 <th>名称</th>
-                <th>协议</th>
-                <th>接口地址</th>
-                <th>Key 预览</th>
                 <th>状态</th>
                 <th>引用影响</th>
                 <th>操作</th>
@@ -318,42 +489,25 @@ export function ProvidersPage({
             <tbody>
               {providers.length === 0 ? (
                 <tr>
-                  <td colSpan={7}>
-                    <div className="table-empty">还没有 Provider，先在上方创建第一个。</div>
+                  <td colSpan={4}>
+                    <div className="table-empty">还没有 Provider，先创建一个逻辑 Provider。</div>
                   </td>
                 </tr>
               ) : (
                 providers.map((provider) => {
-                  const impact = providerImpactMap.get(provider.id);
-                  const bindingCount = impact?.bindingCount ?? 0;
-                  const enabledBindingCount = impact?.enabledBindingCount ?? 0;
-                  const modelCount = impact?.modelIds.size ?? 0;
+                  const impact = providerImpactMap.get(provider.id) ?? {
+                    bindingCount: 0,
+                    enabledBindingCount: 0,
+                    modelCount: 0
+                  };
 
                   return (
                     <tr key={provider.id}>
                       <td>
                         <div className="table-entity">
                           <strong>{provider.name}</strong>
-                          <small className="muted">
-                            {provider.protocol === "anthropic" && provider.apiVersion
-                              ? `API Version ${provider.apiVersion}`
-                              : "兼容 OpenAI / Responses / Chat Completions"}
-                          </small>
+                          <small className="muted">{getConfiguredSummary(provider)}</small>
                         </div>
-                      </td>
-                      <td>
-                        <div className="table-entity">
-                          <strong>{getProtocolLabel(provider.protocol)}</strong>
-                          <small className="muted">
-                            {provider.protocol === "anthropic"
-                              ? "原生 Anthropic 协议"
-                              : "OpenAI 兼容协议"}
-                          </small>
-                        </div>
-                      </td>
-                      <td>{provider.baseUrl}</td>
-                      <td>
-                        <code>{provider.apiKeyPreview ?? "-"}</code>
                       </td>
                       <td>
                         <span className={provider.enabled ? "status-pill online" : "status-pill offline"}>
@@ -362,9 +516,9 @@ export function ProvidersPage({
                       </td>
                       <td>
                         <div className="table-entity">
-                          <strong>{bindingCount} 条 binding</strong>
+                          <strong>{impact.bindingCount} 条 binding</strong>
                           <small className="muted">
-                            {modelCount} 个模型，{enabledBindingCount} 条已启用
+                            {impact.modelCount} 个模型，{impact.enabledBindingCount} 条已启用
                           </small>
                         </div>
                       </td>
@@ -386,13 +540,79 @@ export function ProvidersPage({
         </div>
       </section>
 
+      <Modal
+        open={isCreateModalOpen}
+        title="新增 Provider"
+        description="名称是逻辑 Provider 名称。OpenAI 与 Anthropic 两个协议区块允许留空，但至少完整填写一个。"
+        onClose={() => setIsCreateModalOpen(false)}
+      >
+        <div className="stack">
+          <section className="panel panel-elevated">
+            <div className="form-grid">
+              <label>
+                <span>名称</span>
+                <input
+                  value={createDraft.name}
+                  onChange={(event) => setCreateDraft((current) => ({ ...current, name: event.target.value }))}
+                  placeholder="例如：Official / Proxy / Backup"
+                />
+              </label>
+            </div>
+
+            <label className="inline">
+              <input
+                type="checkbox"
+                checked={createDraft.enabled}
+                onChange={(event) => setCreateDraft((current) => ({ ...current, enabled: event.target.checked }))}
+              />
+              <span>创建后立即启用</span>
+            </label>
+          </section>
+
+          <ConfigSection
+            title="OpenAI 配置"
+            protocol="openai"
+            draft={createDraft.openai}
+            configuredConfig={null}
+            allowEmpty
+            onChange={(patch) => updateCreateDraftProtocol("openai", patch)}
+          />
+
+          <ConfigSection
+            title="Anthropic 配置"
+            protocol="anthropic"
+            draft={createDraft.anthropic}
+            configuredConfig={null}
+            allowEmpty
+            onChange={(patch) => updateCreateDraftProtocol("anthropic", patch)}
+          />
+
+          <div className="toolbar">
+            <button
+              type="button"
+              className="primary"
+              disabled={busyAction !== null}
+              onClick={() => {
+                try {
+                  handleCreate();
+                } catch (error) {
+                  onError(error);
+                }
+              }}
+            >
+              创建 Provider
+            </button>
+          </div>
+        </div>
+      </Modal>
+
       <Drawer
         open={Boolean(selectedProvider && draft)}
         size="wide"
-        title={draft ? `Provider 配置 · ${draft.name}` : ""}
+        title={draft ? `Provider 配置 · ${draft.name || selectedProvider?.name || ""}` : ""}
         subtitle={
           selectedProvider
-            ? "在抽屉里维护 Provider 基本信息、敏感 Key 替换、连通性测试和删除确认。"
+            ? "逻辑 Provider 的名称和总开关在这里维护；OpenAI / Anthropic 两套协议配置分别独立保存和测试。"
             : undefined
         }
         onClose={closeDrawer}
@@ -403,7 +623,7 @@ export function ProvidersPage({
               <div className="panel-head">
                 <div className="stack compact-stack">
                   <h4>基础配置</h4>
-                  <p className="muted">更新名称、协议、接口地址、超时和启用状态。</p>
+                  <p className="muted">管理逻辑 Provider 的名称与启用状态。</p>
                 </div>
                 <span className={draft.enabled ? "status-pill online" : "status-pill offline"}>
                   {draft.enabled ? "启用中" : "已停用"}
@@ -415,121 +635,47 @@ export function ProvidersPage({
                   <span>名称</span>
                   <input
                     value={draft.name}
-                    onChange={(event) => updateDraft({ name: event.target.value })}
-                  />
-                </label>
-
-                <label>
-                  <span>协议类型</span>
-                  <select
-                    value={draft.protocol}
-                    onChange={(event) => {
-                      const protocol = event.target.value as "openai" | "anthropic";
-                      updateDraft({
-                        protocol,
-                        apiVersion:
-                          protocol === "anthropic"
-                            ? (draft.apiVersion ?? ANTHROPIC_DEFAULT_API_VERSION)
-                            : null
-                      });
-                    }}
-                  >
-                    <option value="openai">OpenAI Compatible</option>
-                    <option value="anthropic">Anthropic / Claude</option>
-                  </select>
-                </label>
-
-                <label>
-                  <span>接口地址</span>
-                  <input
-                    value={draft.baseUrl}
-                    onChange={(event) => updateDraft({ baseUrl: event.target.value })}
-                    placeholder={getCreatePlaceholder(draft.protocol)}
-                  />
-                </label>
-
-                <label>
-                  <span>测试超时(ms)</span>
-                  <input
-                    type="number"
-                    step="1000"
-                    value={draft.testTimeoutMs}
                     onChange={(event) =>
-                      updateDraft({ testTimeoutMs: Number(event.target.value) })
+                      setDraft((current) => (current ? { ...current, name: event.target.value } : current))
                     }
                   />
                 </label>
-
-                {draft.protocol === "anthropic" ? (
-                  <label>
-                    <span>Anthropic API Version</span>
-                    <input
-                      value={draft.apiVersion ?? ANTHROPIC_DEFAULT_API_VERSION}
-                      onChange={(event) => updateDraft({ apiVersion: event.target.value })}
-                      placeholder={ANTHROPIC_DEFAULT_API_VERSION}
-                    />
-                  </label>
-                ) : null}
               </div>
 
               <label className="inline">
                 <input
                   type="checkbox"
                   checked={draft.enabled}
-                  onChange={(event) => updateDraft({ enabled: event.target.checked })}
+                  onChange={(event) =>
+                    setDraft((current) => (current ? { ...current, enabled: event.target.checked } : current))
+                  }
                 />
                 <span>Provider 启用</span>
               </label>
             </section>
 
+            <ConfigSection
+              title="OpenAI 配置"
+              protocol="openai"
+              draft={draft.openai}
+              configuredConfig={selectedProvider.openaiConfig}
+              onChange={(patch) => updateDraftProtocol("openai", patch)}
+            />
+
+            <ConfigSection
+              title="Anthropic 配置"
+              protocol="anthropic"
+              draft={draft.anthropic}
+              configuredConfig={selectedProvider.anthropicConfig}
+              onChange={(patch) => updateDraftProtocol("anthropic", patch)}
+            />
+
             <section className="panel panel-elevated">
               <div className="panel-head">
                 <div className="stack compact-stack">
-                  <h4>Key 与引用影响</h4>
-                  <p className="muted">默认只展示掩码预览，敏感 Key 替换动作单独展开。</p>
+                  <h4>引用影响</h4>
+                  <p className="muted">删除整个 Provider 会移除其所有协议 binding，但不会删除模型 alias 或审计记录。</p>
                 </div>
-                <span className="pill">{selectedProvider.apiKeyPreview ?? "未设置 Key"}</span>
-              </div>
-
-              <div className="stack compact-stack">
-                <code className="secret-preview">{selectedProvider.apiKeyPreview ?? "暂无已保存 Key"}</code>
-
-                {isReplacingKey ? (
-                  <div className="stack">
-                    <label>
-                      <span>新的 API Key</span>
-                      <input
-                        type="password"
-                        placeholder="输入新的 API Key"
-                        value={replacementApiKey}
-                        onChange={(event) => setReplacementApiKey(event.target.value)}
-                      />
-                    </label>
-
-                    <div className="provider-secret-actions">
-                      <button
-                        type="button"
-                        className="secondary"
-                        onClick={() => {
-                          setIsReplacingKey(false);
-                          setReplacementApiKey("");
-                        }}
-                      >
-                        取消更换
-                      </button>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="provider-secret-actions">
-                    <button
-                      type="button"
-                      className="secondary"
-                      onClick={() => setIsReplacingKey(true)}
-                    >
-                      更换 Key
-                    </button>
-                  </div>
-                )}
               </div>
 
               <div className="detail-grid">
@@ -538,7 +684,7 @@ export function ProvidersPage({
                   <strong>{selectedImpact.bindingCount} 条 binding</strong>
                 </div>
                 <div>
-                  <span>启用中的 binding</span>
+                  <span>已启用 binding</span>
                   <strong>{selectedImpact.enabledBindingCount} 条</strong>
                 </div>
                 <div>
@@ -546,19 +692,8 @@ export function ProvidersPage({
                   <strong>{selectedImpact.modelCount} 个模型</strong>
                 </div>
                 <div>
-                  <span>保存语义</span>
-                  <strong>{replacementApiKey ? "将写入新 Key" : "空值不会替换旧 Key"}</strong>
-                </div>
-              </div>
-
-              <p className="muted">连接测试使用当前已保存配置。若刚修改了字段，请先保存再测试。</p>
-            </section>
-
-            <section className="panel panel-elevated provider-danger-panel">
-              <div className="panel-head">
-                <div className="stack compact-stack">
-                  <h4>保存、测试与删除</h4>
-                  <p className="muted">删除会自动移除关联 binding，但不会删除模型别名或历史审计日志。</p>
+                  <span>配置摘要</span>
+                  <strong>{getConfiguredSummary(selectedProvider)}</strong>
                 </div>
               </div>
 
@@ -568,30 +703,11 @@ export function ProvidersPage({
                   className="primary"
                   disabled={busyAction !== null}
                   onClick={() => {
-                    setBusyAction("save");
-
-                    void api.providers
-                      .update(selectedProvider.id, {
-                        name: draft.name,
-                        baseUrl: draft.baseUrl,
-                        protocol: draft.protocol,
-                        apiVersion:
-                          draft.protocol === "anthropic"
-                            ? (draft.apiVersion ?? ANTHROPIC_DEFAULT_API_VERSION)
-                            : null,
-                        enabled: draft.enabled,
-                        testTimeoutMs: draft.testTimeoutMs,
-                        ...(replacementApiKey ? { apiKey: replacementApiKey } : {})
-                      })
-                      .then(async (response) => {
-                        setDraft(buildProviderDraft(response.item));
-                        setIsReplacingKey(false);
-                        setReplacementApiKey("");
-                        await Promise.all([refreshProviders(), refreshModels()]);
-                        onNotice(`Provider ${response.item.name} 已更新。`);
-                      })
-                      .catch(onError)
-                      .finally(() => setBusyAction(null));
+                    try {
+                      handleSave(selectedProvider, draft);
+                    } catch (error) {
+                      onError(error);
+                    }
                   }}
                 >
                   保存配置
@@ -599,34 +715,60 @@ export function ProvidersPage({
 
                 <button
                   type="button"
-                  className="ghost"
-                  disabled={busyAction !== null}
+                  className="secondary"
+                  disabled={busyAction !== null || !selectedProvider.openaiConfig}
                   onClick={() => {
-                    setBusyAction("test");
-
+                    setBusyAction("test-openai");
                     void api.providers
-                      .test(selectedProvider.id)
+                      .test(selectedProvider.id, "openai")
                       .then((result) => {
                         onNotice(
-                          `${selectedProvider.name} 连接${result.success ? "成功" : "失败"}，耗时 ${
-                            result.responseTimeMs
-                          }ms，消息：${result.message}`
+                          `OpenAI 测试${result.success ? "成功" : "失败"}，耗时 ${result.responseTimeMs}ms：${result.message}`
                         );
                       })
                       .catch(onError)
                       .finally(() => setBusyAction(null));
                   }}
                 >
-                  测试连接
+                  测试 OpenAI
                 </button>
+
+                <button
+                  type="button"
+                  className="secondary"
+                  disabled={busyAction !== null || !selectedProvider.anthropicConfig}
+                  onClick={() => {
+                    setBusyAction("test-anthropic");
+                    void api.providers
+                      .test(selectedProvider.id, "anthropic")
+                      .then((result) => {
+                        onNotice(
+                          `Anthropic 测试${result.success ? "成功" : "失败"}，耗时 ${result.responseTimeMs}ms：${result.message}`
+                        );
+                      })
+                      .catch(onError)
+                      .finally(() => setBusyAction(null));
+                  }}
+                >
+                  测试 Anthropic
+                </button>
+              </div>
+            </section>
+
+            <section className="panel panel-elevated provider-danger-panel">
+              <div className="panel-head">
+                <div className="stack compact-stack">
+                  <h4>删除 Provider</h4>
+                  <p className="muted">删除后会同步移除这个逻辑 Provider 关联的所有 binding。</p>
+                </div>
               </div>
 
               <p className="feedback warning">
-                这次删除将移除 {selectedImpact.bindingCount} 条 binding，影响 {selectedImpact.modelCount} 个模型。
+                本次删除将移除 {selectedImpact.bindingCount} 条 binding，影响 {selectedImpact.modelCount} 个模型。
               </p>
 
               <label>
-                <span>输入当前已保存名称 “{selectedProvider.name}” 以确认删除</span>
+                <span>输入当前 Provider 名称 “{selectedProvider.name}” 以确认删除</span>
                 <input
                   value={deleteConfirmation}
                   onChange={(event) => setDeleteConfirmation(event.target.value)}

@@ -125,7 +125,14 @@ export function SystemPage({
       providers.map((provider) => ({
         id: provider.id,
         label: provider.name,
-        hint: provider.baseUrl
+        hint:
+          provider.openaiConfig && provider.anthropicConfig
+            ? "OpenAI / Anthropic"
+            : provider.anthropicConfig
+              ? "Anthropic"
+              : provider.openaiConfig
+                ? "OpenAI"
+                : "Unconfigured"
       })),
     [providers]
   );

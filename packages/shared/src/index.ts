@@ -15,6 +15,7 @@ export const endpointTypeSchema = z.enum([
 
 export const providerProtocolSchema = z.enum(["openai", "anthropic"]);
 export const ANTHROPIC_API_VERSION = "2023-06-01";
+export type ProviderProtocol = z.infer<typeof providerProtocolSchema>;
 
 export const auditStatusSchema = z.enum([
   "success",
@@ -58,24 +59,50 @@ export const loginSchema = z.object({
   password: z.string().min(8).max(256)
 });
 
-export const providerCreateSchema = z.object({
-  name: z.string().min(1).max(120),
+const providerProtocolConfigBaseSchema = z.object({
   baseUrl: z.string().url(),
   apiKey: z.string().min(1).max(512),
-  protocol: providerProtocolSchema.default("openai"),
-  apiVersion: z.string().min(1).max(64).optional().nullable(),
-  enabled: z.boolean().default(true),
   testTimeoutMs: z.number().int().min(1000).max(600000).default(10000)
 });
 
-export const providerUpdateSchema = z.object({
-  name: z.string().min(1).max(120).optional(),
+export const openAiProviderConfigCreateSchema = providerProtocolConfigBaseSchema;
+export const anthropicProviderConfigCreateSchema = providerProtocolConfigBaseSchema.extend({
+  apiVersion: z.string().min(1).max(64).optional().nullable()
+});
+
+const providerProtocolConfigUpdateBaseSchema = z.object({
   baseUrl: z.string().url().optional(),
   apiKey: z.string().min(1).max(512).optional(),
-  protocol: providerProtocolSchema.optional(),
-  apiVersion: z.string().min(1).max(64).optional().nullable(),
-  enabled: z.boolean().optional(),
   testTimeoutMs: z.number().int().min(1000).max(600000).optional()
+});
+
+export const openAiProviderConfigUpdateSchema = providerProtocolConfigUpdateBaseSchema;
+export const anthropicProviderConfigUpdateSchema = providerProtocolConfigUpdateBaseSchema.extend({
+  apiVersion: z.string().min(1).max(64).optional().nullable()
+});
+
+export const providerCreateSchema = z
+  .object({
+    name: z.string().min(1).max(120),
+    enabled: z.boolean().default(true),
+    openai: openAiProviderConfigCreateSchema.optional(),
+    anthropic: anthropicProviderConfigCreateSchema.optional()
+  })
+  .superRefine((value, context) => {
+    if (!value.openai && !value.anthropic) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "At least one provider protocol config is required",
+        path: ["openai"]
+      });
+    }
+  });
+
+export const providerUpdateSchema = z.object({
+  name: z.string().min(1).max(120).optional(),
+  enabled: z.boolean().optional(),
+  openai: openAiProviderConfigUpdateSchema.optional().nullable(),
+  anthropic: anthropicProviderConfigUpdateSchema.optional().nullable()
 });
 
 export const modelAliasCreateSchema = z.object({
@@ -101,6 +128,7 @@ export const modelAliasUpdateSchema = z.object({
 
 export const bindingCreateSchema = z.object({
   providerId: z.string().uuid(),
+  protocol: providerProtocolSchema,
   upstreamModel: z.string().min(1).max(240),
   inputPrice: z.number().min(0),
   outputPrice: z.number().min(0),
@@ -117,6 +145,7 @@ export const bindingUpdateSchema = z.object({
 });
 
 export const runtimeOrderSchema = z.object({
+  protocol: providerProtocolSchema,
   bindingIds: z.array(z.string().uuid()).min(1)
 });
 

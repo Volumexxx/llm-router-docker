@@ -1,7 +1,9 @@
 import type { FastifyInstance } from "fastify";
+import { z } from "zod";
 
 import {
   providerCreateSchema,
+  providerProtocolSchema,
   providerUpdateSchema
 } from "../../../../../packages/shared/src/index.ts";
 import { sendJsonError, sendValidationError } from "../../lib/http.ts";
@@ -10,11 +12,19 @@ import {
   createProvider,
   deleteProvider,
   getProviderById,
+  getProviderProtocolConfig,
   isSqliteUniqueConstraintError,
   listProviders,
+  ProviderConfigRequiredError,
+  ProviderProtocolConfigConflictError,
+  ProviderProtocolConfigIncompleteError,
   updateProvider
 } from "../../services/providers.ts";
 import { testProviderConnection } from "../../services/provider-client.ts";
+
+const providerTestSchema = z.object({
+  protocol: providerProtocolSchema
+});
 
 export async function registerAdminProviderRoutes(app: FastifyInstance): Promise<void> {
   const protectedHandlers = [enforceAdminIpAllowlist, requireAdminSession];
@@ -39,7 +49,17 @@ export async function registerAdminProviderRoutes(app: FastifyInstance): Promise
       }
 
       if (isSqliteUniqueConstraintError(error)) {
-        sendJsonError(reply, 409, "provider_name_conflict", "Provider 名称已存在");
+        sendJsonError(reply, 409, "provider_name_conflict", "Provider already exists");
+        return;
+      }
+
+      if (error instanceof ProviderConfigRequiredError) {
+        sendJsonError(reply, 400, "provider_config_required", error.message);
+        return;
+      }
+
+      if (error instanceof ProviderProtocolConfigIncompleteError) {
+        sendJsonError(reply, 400, "provider_protocol_config_incomplete", error.message);
         return;
       }
 
@@ -62,7 +82,7 @@ export async function registerAdminProviderRoutes(app: FastifyInstance): Promise
         );
 
         if (!provider) {
-          sendJsonError(reply, 404, "provider_not_found", "Provider 不存在");
+          sendJsonError(reply, 404, "provider_not_found", "Provider not found");
           return;
         }
 
@@ -73,7 +93,27 @@ export async function registerAdminProviderRoutes(app: FastifyInstance): Promise
         }
 
         if (isSqliteUniqueConstraintError(error)) {
-          sendJsonError(reply, 409, "provider_name_conflict", "Provider 名称已存在");
+          sendJsonError(reply, 409, "provider_name_conflict", "Provider already exists");
+          return;
+        }
+
+        if (error instanceof ProviderConfigRequiredError) {
+          sendJsonError(reply, 400, "provider_config_required", error.message);
+          return;
+        }
+
+        if (error instanceof ProviderProtocolConfigIncompleteError) {
+          sendJsonError(reply, 400, "provider_protocol_config_incomplete", error.message);
+          return;
+        }
+
+        if (error instanceof ProviderProtocolConfigConflictError) {
+          sendJsonError(
+            reply,
+            409,
+            "provider_protocol_config_in_use",
+            `${error.protocol} config is still referenced by ${error.bindingCount} binding(s) across ${error.modelCount} model(s)`
+          );
           return;
         }
 
@@ -91,13 +131,13 @@ export async function registerAdminProviderRoutes(app: FastifyInstance): Promise
         const result = deleteProvider(request.server.appCtx.database.sqlite, providerId);
 
         if (!result) {
-          sendJsonError(reply, 404, "provider_not_found", "Provider 不存在");
+          sendJsonError(reply, 404, "provider_not_found", "Provider not found");
           return;
         }
 
         reply.send(result);
       } catch {
-        sendJsonError(reply, 500, "provider_delete_failed", "Provider 删除失败");
+        sendJsonError(reply, 500, "provider_delete_failed", "Provider delete failed");
       }
     }
   );
@@ -106,20 +146,56 @@ export async function registerAdminProviderRoutes(app: FastifyInstance): Promise
     "/admin/api/providers/:providerId/test",
     { preHandler: protectedHandlers },
     async (request, reply) => {
-      const providerId = (request.params as { providerId: string }).providerId;
-      const provider = getProviderById(
-        request.server.appCtx.database.sqlite,
-        request.server.appCtx.config,
-        providerId
-      );
+      try {
+        const providerId = (request.params as { providerId: string }).providerId;
+        const input = providerTestSchema.parse(request.body ?? {});
+        const provider = getProviderById(
+          request.server.appCtx.database.sqlite,
+          request.server.appCtx.config,
+          providerId
+        );
 
-      if (!provider) {
-        sendJsonError(reply, 404, "provider_not_found", "Provider 不存在");
-        return;
+        if (!provider) {
+          sendJsonError(reply, 404, "provider_not_found", "Provider not found");
+          return;
+        }
+
+        const protocolConfig = getProviderProtocolConfig(
+          request.server.appCtx.database.sqlite,
+          request.server.appCtx.config,
+          providerId,
+          input.protocol
+        );
+
+        if (!protocolConfig) {
+          sendJsonError(
+            reply,
+            404,
+            "provider_protocol_config_not_found",
+            `${input.protocol} config is not configured for this provider`
+          );
+          return;
+        }
+
+        const result = await testProviderConnection(
+          request.server.appCtx.fetchImpl,
+          request.server.appCtx.config,
+          {
+            baseUrl: protocolConfig.baseUrl,
+            apiKey: protocolConfig.apiKey,
+            protocol: protocolConfig.protocol,
+            apiVersion: protocolConfig.apiVersion,
+            testTimeoutMs: protocolConfig.testTimeoutMs
+          }
+        );
+        reply.send(result);
+      } catch (error) {
+        if (sendValidationError(reply, error)) {
+          return;
+        }
+
+        throw error;
       }
-
-      const result = await testProviderConnection(request.server.appCtx.fetchImpl, request.server.appCtx.config, provider);
-      reply.send(result);
     }
   );
 }

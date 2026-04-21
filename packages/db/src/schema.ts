@@ -5,17 +5,34 @@ export const providers = sqliteTable(
   {
     id: text("id").primaryKey(),
     name: text("name").notNull(),
-    baseUrl: text("base_url").notNull(),
-    apiKeyEncrypted: text("api_key_encrypted").notNull(),
-    protocol: text("protocol").notNull().default("openai"),
-    apiVersion: text("api_version"),
     enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
-    testTimeoutMs: integer("test_timeout_ms").notNull().default(10000),
     createdAt: text("created_at").notNull(),
     updatedAt: text("updated_at").notNull()
   },
   (table) => ({
     nameUnique: uniqueIndex("providers_name_unique").on(table.name)
+  })
+);
+
+export const providerProtocolConfigs = sqliteTable(
+  "provider_protocol_configs",
+  {
+    id: text("id").primaryKey(),
+    providerId: text("provider_id").notNull(),
+    protocol: text("protocol").notNull(),
+    baseUrl: text("base_url").notNull(),
+    apiKeyEncrypted: text("api_key_encrypted").notNull(),
+    testTimeoutMs: integer("test_timeout_ms").notNull().default(10000),
+    apiVersion: text("api_version"),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull()
+  },
+  (table) => ({
+    providerProtocolUnique: uniqueIndex("provider_protocol_configs_provider_protocol_unique").on(
+      table.providerId,
+      table.protocol
+    ),
+    providerIndex: index("provider_protocol_configs_provider_index").on(table.providerId)
   })
 );
 
@@ -40,6 +57,7 @@ export const modelBindings = sqliteTable(
     id: text("id").primaryKey(),
     modelAliasId: text("model_alias_id").notNull(),
     providerId: text("provider_id").notNull(),
+    protocol: text("protocol").notNull().default("openai"),
     upstreamModel: text("upstream_model").notNull(),
     inputPrice: real("input_price").notNull().default(0),
     outputPrice: real("output_price").notNull().default(0),
@@ -52,10 +70,12 @@ export const modelBindings = sqliteTable(
   (table) => ({
     modelProviderUnique: uniqueIndex("model_bindings_model_provider_unique").on(
       table.modelAliasId,
-      table.providerId
+      table.providerId,
+      table.protocol
     ),
     modelPriorityIndex: index("model_bindings_model_priority_index").on(
       table.modelAliasId,
+      table.protocol,
       table.runtimePriority
     )
   })
@@ -152,6 +172,7 @@ export const auditLogs = sqliteTable(
     endpointType: text("endpoint_type").notNull(),
     providerId: text("provider_id"),
     providerName: text("provider_name"),
+    providerProtocol: text("provider_protocol"),
     modelAlias: text("model_alias"),
     upstreamModel: text("upstream_model"),
     apiKeyId: text("api_key_id"),
@@ -174,6 +195,7 @@ export const auditLogs = sqliteTable(
   (table) => ({
     occurredAtIndex: index("audit_logs_occurred_at_index").on(table.occurredAt),
     providerIndex: index("audit_logs_provider_id_index").on(table.providerId),
+    providerProtocolIndex: index("audit_logs_provider_protocol_index").on(table.providerProtocol),
     modelIndex: index("audit_logs_model_alias_index").on(table.modelAlias),
     statusIndex: index("audit_logs_status_category_index").on(table.statusCategory),
     endpointIndex: index("audit_logs_endpoint_type_index").on(table.endpointType),

@@ -53,25 +53,60 @@ async function request<T>(input: string, init?: RequestInit): Promise<T> {
   return payload as T;
 }
 
-export interface ProviderPayload {
-  name: string;
+export type ProviderProtocol = "openai" | "anthropic";
+
+export interface OpenAiProviderConfigPayload {
   baseUrl: string;
   apiKey: string;
-  protocol: "openai" | "anthropic";
-  apiVersion?: string | null;
-  enabled: boolean;
   testTimeoutMs: number;
+}
+
+export interface AnthropicProviderConfigPayload extends OpenAiProviderConfigPayload {
+  apiVersion?: string | null;
+}
+
+export interface OpenAiProviderConfigUpdatePayload {
+  baseUrl?: string;
+  apiKey?: string;
+  testTimeoutMs?: number;
+}
+
+export interface AnthropicProviderConfigUpdatePayload extends OpenAiProviderConfigUpdatePayload {
+  apiVersion?: string | null;
+}
+
+export interface ProviderPayload {
+  name: string;
+  enabled: boolean;
+  openai?: OpenAiProviderConfigPayload | null;
+  anthropic?: AnthropicProviderConfigPayload | null;
+}
+
+export interface ProviderUpdatePayload {
+  name?: string;
+  enabled?: boolean;
+  openai?: OpenAiProviderConfigUpdatePayload | null;
+  anthropic?: AnthropicProviderConfigUpdatePayload | null;
+}
+
+export interface ProviderProtocolConfigItem {
+  id: string;
+  configured: true;
+  protocol: ProviderProtocol;
+  baseUrl: string;
+  testTimeoutMs: number;
+  apiVersion: string | null;
+  apiKeyPreview: string | null;
 }
 
 export interface ProviderItem {
   id: string;
   name: string;
-  baseUrl: string;
-  protocol: "openai" | "anthropic";
-  apiVersion: string | null;
   enabled: boolean;
-  testTimeoutMs: number;
-  apiKeyPreview: string | null;
+  createdAt: string;
+  updatedAt: string;
+  openaiConfig: ProviderProtocolConfigItem | null;
+  anthropicConfig: ProviderProtocolConfigItem | null;
 }
 
 export interface ProviderDeleteResult {
@@ -106,6 +141,7 @@ export interface ApiKeyItem {
 
 export interface BindingPayload {
   providerId: string;
+  protocol: ProviderProtocol;
   upstreamModel: string;
   inputPrice: number;
   outputPrice: number;
@@ -119,6 +155,11 @@ export interface BindingItem extends BindingPayload {
   defaultPriority: number;
 }
 
+export interface ModelBindings {
+  openai: BindingItem[];
+  anthropic: BindingItem[];
+}
+
 export interface ModelPayload {
   alias: string;
   displayName: string;
@@ -127,7 +168,7 @@ export interface ModelPayload {
 
 export interface ModelItem extends ModelPayload {
   id: string;
-  bindings: BindingItem[];
+  bindings: ModelBindings;
 }
 
 export interface TrendPoint {
@@ -271,7 +312,7 @@ export const api = {
         method: "POST",
         body: JSON.stringify(payload)
       }),
-    update: (providerId: string, payload: Partial<ProviderPayload>) =>
+    update: (providerId: string, payload: ProviderUpdatePayload) =>
       request<{ item: ProviderItem }>(`/admin/api/providers/${providerId}`, {
         method: "PATCH",
         body: JSON.stringify(payload)
@@ -280,7 +321,7 @@ export const api = {
       request<ProviderDeleteResult>(`/admin/api/providers/${providerId}`, {
         method: "DELETE"
       }),
-    test: (providerId: string) =>
+    test: (providerId: string, protocol: ProviderProtocol) =>
       request<{
         success: boolean;
         statusCode: number | null;
@@ -288,7 +329,8 @@ export const api = {
         visibleModelCount: number | null;
         message: string;
       }>(`/admin/api/providers/${providerId}/test`, {
-        method: "POST"
+        method: "POST",
+        body: JSON.stringify({ protocol })
       })
   },
   models: {
@@ -325,15 +367,15 @@ export const api = {
       request<{ success: boolean }>(`/admin/api/models/${modelId}/bindings/${bindingId}`, {
         method: "DELETE"
       }),
-    applyRuntimeOrder: (modelId: string, bindingIds: string[]) =>
+    applyRuntimeOrder: (modelId: string, protocol: ProviderProtocol, bindingIds: string[]) =>
       request<{ item: ModelItem }>(`/admin/api/models/${modelId}/runtime-order/apply`, {
         method: "POST",
-        body: JSON.stringify({ bindingIds })
+        body: JSON.stringify({ protocol, bindingIds })
       }),
-    saveDefaultOrder: (modelId: string, bindingIds: string[]) =>
+    saveDefaultOrder: (modelId: string, protocol: ProviderProtocol, bindingIds: string[]) =>
       request<{ item: ModelItem }>(`/admin/api/models/${modelId}/runtime-order/save-default`, {
         method: "POST",
-        body: JSON.stringify({ bindingIds })
+        body: JSON.stringify({ protocol, bindingIds })
       })
   },
   dashboard: {

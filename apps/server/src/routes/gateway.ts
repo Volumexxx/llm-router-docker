@@ -4,6 +4,7 @@ import { ANTHROPIC_API_VERSION, estimateCost } from "../../../../packages/shared
 import { sendGatewayError } from "../lib/http.ts";
 import { clampText, parseJson } from "../lib/utils.ts";
 import {
+  requireGatewayAnthropicToken,
   requireGatewayApiKeyHeader,
   requireGatewayBearerToken,
   rejectGatewayRequest
@@ -90,7 +91,7 @@ function validateAnthropicVersion(
 
 function readGatewayToken(request: FastifyRequest, protocol: GatewayProtocol): string | null {
   return protocol === "anthropic"
-    ? requireGatewayApiKeyHeader(request)
+    ? requireGatewayAnthropicToken(request)
     : requireGatewayBearerToken(request);
 }
 
@@ -240,6 +241,7 @@ async function handleProxyEndpoint(
     const resolution = resolveRoutableBinding(
       request.server.appCtx.database.sqlite,
       requestedModel,
+      gatewayProtocol,
       request.gatewayApiKey ?? undefined
     );
 
@@ -273,6 +275,7 @@ async function handleProxyEndpoint(
         endpointType,
         providerId: binding.providerId,
         providerName: binding.providerName,
+        providerProtocol: binding.providerProtocol,
         modelAlias: binding.modelAlias,
         upstreamModel: binding.upstreamModel,
         isStream: Boolean(body?.stream),
@@ -323,6 +326,7 @@ async function handleProxyEndpoint(
             endpointType,
             providerId: binding.providerId,
             providerName: binding.providerName,
+            providerProtocol: binding.providerProtocol,
             modelAlias: binding.modelAlias,
             upstreamModel: binding.upstreamModel,
             isStream: true,
@@ -359,6 +363,7 @@ async function handleProxyEndpoint(
             endpointType,
             providerId: binding.providerId,
             providerName: binding.providerName,
+            providerProtocol: binding.providerProtocol,
             modelAlias: binding.modelAlias,
             upstreamModel: binding.upstreamModel,
             isStream: true,
@@ -394,6 +399,7 @@ async function handleProxyEndpoint(
           endpointType,
           providerId: binding.providerId,
           providerName: binding.providerName,
+          providerProtocol: binding.providerProtocol,
           modelAlias: binding.modelAlias,
           upstreamModel: binding.upstreamModel,
           isStream: false,
@@ -417,6 +423,7 @@ async function handleProxyEndpoint(
         endpointType,
         providerId: binding.providerId,
         providerName: binding.providerName,
+        providerProtocol: binding.providerProtocol,
         modelAlias: binding.modelAlias,
         upstreamModel: binding.upstreamModel,
         isStream: false,
@@ -449,6 +456,7 @@ export async function registerGatewayRoutes(app: FastifyInstance): Promise<void>
 
     const models = listVisibleModels(
       request.server.appCtx.database.sqlite,
+      protocol,
       request.gatewayApiKey ?? undefined
     );
 

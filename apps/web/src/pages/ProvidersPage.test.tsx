@@ -1,7 +1,7 @@
 import { act, type ComponentProps } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { ModelItem, ProviderItem, ProviderPayload } from "../lib/api.ts";
+import type { BindingItem, ModelItem, ProviderItem, ProviderPayload } from "../lib/api.ts";
 import { click, getButtonByText, getButtonsByText, render } from "../test/render.tsx";
 import { ProvidersPage } from "./ProvidersPage.tsx";
 
@@ -12,39 +12,44 @@ const providerApiMocks = vi.hoisted(() => ({
   remove: vi.fn()
 }));
 
-vi.mock("../lib/api.ts", () => ({
-  api: {
-    providers: {
-      create: providerApiMocks.create,
-      update: providerApiMocks.update,
-      test: providerApiMocks.test,
-      remove: providerApiMocks.remove
-    }
-  }
-}));
+vi.mock("../lib/api.ts", async () => {
+  const actual = await vi.importActual<typeof import("../lib/api.ts")>("../lib/api.ts");
 
-const emptyProviderForm: ProviderPayload = {
-  name: "",
-  baseUrl: "",
-  apiKey: "",
-  protocol: "openai",
-  apiVersion: null,
-  enabled: true,
-  testTimeoutMs: 10000
-};
+  return {
+    ...actual,
+    api: {
+      ...actual.api,
+      providers: {
+        create: providerApiMocks.create,
+        update: providerApiMocks.update,
+        test: providerApiMocks.test,
+        remove: providerApiMocks.remove
+      }
+    }
+  };
+});
 
 const activeRenders: Array<{ unmount: () => Promise<void> }> = [];
 
-function buildProvider(overrides: Partial<ProviderItem> = {}): ProviderItem {
+function buildProvider(
+  overrides: Partial<ProviderItem> = {}
+): ProviderItem {
   return {
     id: "provider-1",
     name: "OpenAI Main",
-    baseUrl: "https://openai.example/v1",
-    protocol: "openai",
-    apiVersion: null,
     enabled: true,
-    testTimeoutMs: 10000,
-    apiKeyPreview: "sk-***123",
+    createdAt: "2026-04-21T00:00:00.000Z",
+    updatedAt: "2026-04-21T00:00:00.000Z",
+    openaiConfig: {
+      id: "provider-1-openai",
+      configured: true,
+      protocol: "openai",
+      baseUrl: "https://openai.example/v1",
+      testTimeoutMs: 10000,
+      apiVersion: null,
+      apiKeyPreview: "sk-***123"
+    },
+    anthropicConfig: null,
     ...overrides
   };
 }
@@ -55,7 +60,26 @@ function buildModel(overrides: Partial<ModelItem> = {}): ModelItem {
     alias: "gpt-4o-mini",
     displayName: "GPT 4o Mini",
     enabled: true,
-    bindings: [],
+    bindings: {
+      openai: [],
+      anthropic: []
+    },
+    ...overrides
+  };
+}
+
+function buildBinding(overrides: Partial<BindingItem> = {}): BindingItem {
+  return {
+    id: "binding-1",
+    providerId: "provider-1",
+    providerName: "OpenAI Main",
+    protocol: "openai",
+    upstreamModel: "gpt-4o",
+    inputPrice: 1,
+    outputPrice: 2,
+    enabled: true,
+    runtimePriority: 0,
+    defaultPriority: 0,
     ...overrides
   };
 }
@@ -92,8 +116,6 @@ async function renderProvidersPage(
   const props: ComponentProps<typeof ProvidersPage> = {
     providers: [buildProvider()],
     models: [],
-    newProvider: emptyProviderForm,
-    setNewProvider: vi.fn(),
     refreshProviders: vi.fn().mockResolvedValue(undefined),
     refreshModels: vi.fn().mockResolvedValue(undefined),
     refreshApiKeys: vi.fn().mockResolvedValue(undefined),
@@ -123,34 +145,36 @@ describe("ProvidersPage", () => {
     }
   });
 
-  it("renders provider rows as summary rows instead of inline editable controls", async () => {
+  it("renders logical provider rows with protocol summary and impact counts", async () => {
     const providerA = buildProvider();
     const providerB = buildProvider({
       id: "provider-2",
       name: "Claude Node",
-      baseUrl: "https://anthropic.example",
-      protocol: "anthropic",
-      apiVersion: "2023-06-01",
-      apiKeyPreview: "cla***456"
+      openaiConfig: null,
+      anthropicConfig: {
+        id: "provider-2-anthropic",
+        configured: true,
+        protocol: "anthropic",
+        baseUrl: "https://anthropic.example",
+        testTimeoutMs: 15000,
+        apiVersion: "2023-06-01",
+        apiKeyPreview: "cla***456"
+      }
     });
 
     const { view } = await renderProvidersPage({
       providers: [providerA, providerB],
       models: [
         buildModel({
-          bindings: [
-            {
-              id: "binding-1",
-              providerId: providerA.id,
-              providerName: providerA.name,
-              upstreamModel: "gpt-4o",
-              inputPrice: 1,
-              outputPrice: 2,
-              enabled: true,
-              runtimePriority: 0,
-              defaultPriority: 0
-            }
-          ]
+          bindings: {
+            openai: [
+              buildBinding({
+                providerId: providerA.id,
+                providerName: providerA.name
+              })
+            ],
+            anthropic: []
+          }
         })
       ]
     });
@@ -158,34 +182,77 @@ describe("ProvidersPage", () => {
     expect(getButtonsByText(view.container, "配置")).toHaveLength(2);
     expect(view.container.querySelectorAll("tbody input, tbody select, tbody textarea")).toHaveLength(0);
     expect(view.container.textContent).toContain("1 条 binding");
-    expect(view.container.textContent).toContain("Claude Node");
+    expect(view.container.textContent).toContain("仅 OpenAI");
+    expect(view.container.textContent).toContain("仅 Anthropic");
   });
 
-  it("opens the drawer for the selected provider and keeps key replacement collapsed by default", async () => {
-    const providerA = buildProvider();
-    const providerB = buildProvider({
-      id: "provider-2",
-      name: "Claude Node",
-      baseUrl: "https://anthropic.example",
-      protocol: "anthropic",
-      apiVersion: "2023-06-01",
-      apiKeyPreview: "cla***456"
+  it("creates a provider from the modal with independent openai and anthropic payloads", async () => {
+    providerApiMocks.create.mockResolvedValue({
+      item: buildProvider({
+        id: "provider-created",
+        name: "Dual Provider",
+        anthropicConfig: {
+          id: "provider-created-anthropic",
+          configured: true,
+          protocol: "anthropic",
+          baseUrl: "https://api.anthropic.com",
+          testTimeoutMs: 12000,
+          apiVersion: "2023-06-01",
+          apiKeyPreview: "cla***999"
+        }
+      })
     });
 
-    const { view } = await renderProvidersPage({
-      providers: [providerA, providerB]
+    const { view, props } = await renderProvidersPage({
+      providers: []
     });
 
-    await click(getButtonsByText(view.container, "配置")[1]!);
+    await click(getButtonByText(view.container, "新增 Provider"));
 
-    const drawer = view.container.querySelector(".drawer-panel");
-    expect(drawer?.textContent).toContain("Claude Node");
-    expect(drawer?.querySelector('input[placeholder="输入新的 API Key"]')).toBeNull();
+    const modal = view.container.querySelector(".modal-panel");
+    expect(modal).toBeTruthy();
 
-    await click(getButtonByText(drawer ?? view.container, "更换 Key"));
-    expect(drawer?.querySelector('input[placeholder="输入新的 API Key"]')).toBeInstanceOf(
-      HTMLInputElement
-    );
+    const nameInput = modal?.querySelector('input[placeholder="例如：Official / Proxy / Backup"]');
+    const baseUrlInputs = modal?.querySelectorAll('input[placeholder^="https://api."]');
+    const passwordInputs = modal?.querySelectorAll('input[type="password"]');
+    const anthropicVersionInput = modal?.querySelector(
+      `input[placeholder="2023-06-01"]`
+    ) as HTMLInputElement | null;
+
+    expect(nameInput).toBeInstanceOf(HTMLInputElement);
+    expect(baseUrlInputs).toHaveLength(2);
+    expect(passwordInputs).toHaveLength(2);
+    expect(anthropicVersionInput).toBeInstanceOf(HTMLInputElement);
+
+    await setValue(nameInput as HTMLInputElement, "Dual Provider");
+    await setValue(baseUrlInputs?.[0] as HTMLInputElement, "https://api.openai.com/v1");
+    await setValue(passwordInputs?.[0] as HTMLInputElement, "openai-secret");
+    await setValue(baseUrlInputs?.[1] as HTMLInputElement, "https://api.anthropic.com");
+    await setValue(passwordInputs?.[1] as HTMLInputElement, "anthropic-secret");
+    await setValue(anthropicVersionInput as HTMLInputElement, "2023-06-01");
+
+    await click(getButtonByText(modal ?? view.container, "创建 Provider"));
+    await flushAsyncWork();
+
+    expect(providerApiMocks.create).toHaveBeenCalledTimes(1);
+    const createPayload = providerApiMocks.create.mock.calls[0]?.[0] as ProviderPayload;
+    expect(createPayload).toMatchObject({
+      name: "Dual Provider",
+      enabled: true,
+      openai: {
+        baseUrl: "https://api.openai.com/v1",
+        apiKey: "openai-secret",
+        testTimeoutMs: 10000
+      },
+      anthropic: {
+        baseUrl: "https://api.anthropic.com",
+        apiKey: "anthropic-secret",
+        testTimeoutMs: 10000,
+        apiVersion: "2023-06-01"
+      }
+    });
+    expect(props.refreshProviders).toHaveBeenCalledTimes(1);
+    expect(props.onNotice).toHaveBeenCalledWith("Provider 已创建。");
   });
 
   it("omits apiKey when saving without replacement and includes it after entering a new key", async () => {
@@ -201,31 +268,42 @@ describe("ProvidersPage", () => {
     await click(getButtonByText(view.container, "配置"));
 
     let drawer = view.container.querySelector(".drawer-panel");
+    expect(drawer?.textContent).toContain("sk-***123");
     await click(getButtonByText(drawer ?? view.container, "保存配置"));
     await flushAsyncWork();
 
     expect(providerApiMocks.update).toHaveBeenCalledTimes(1);
     expect(providerApiMocks.update.mock.calls[0]?.[0]).toBe(provider.id);
-    expect(providerApiMocks.update.mock.calls[0]?.[1]).not.toHaveProperty("apiKey");
+    expect(providerApiMocks.update.mock.calls[0]?.[1]).toMatchObject({
+      name: provider.name,
+      enabled: true,
+      openai: {
+        baseUrl: provider.openaiConfig?.baseUrl,
+        testTimeoutMs: provider.openaiConfig?.testTimeoutMs
+      }
+    });
+    expect(providerApiMocks.update.mock.calls[0]?.[1].openai).not.toHaveProperty("apiKey");
+    expect(providerApiMocks.update.mock.calls[0]?.[1].anthropic).toBeUndefined();
 
-    await click(getButtonByText(drawer ?? view.container, "更换 Key"));
-    const replacementInput = view.container.querySelector(
-      '.drawer-panel input[placeholder="输入新的 API Key"]'
-    );
-    expect(replacementInput).toBeInstanceOf(HTMLInputElement);
+    const passwordInputs = drawer?.querySelectorAll('input[type="password"]');
+    expect(passwordInputs).toHaveLength(2);
+    await setValue(passwordInputs?.[0] as HTMLInputElement, "new-secret-key");
 
-    await setValue(replacementInput as HTMLInputElement, "new-secret-key");
     drawer = view.container.querySelector(".drawer-panel");
     await click(getButtonByText(drawer ?? view.container, "保存配置"));
     await flushAsyncWork();
 
     expect(providerApiMocks.update).toHaveBeenCalledTimes(2);
     expect(providerApiMocks.update.mock.calls[1]?.[1]).toMatchObject({
-      apiKey: "new-secret-key"
+      openai: {
+        apiKey: "new-secret-key"
+      }
     });
+    const refreshedPasswordInputs = view.container.querySelectorAll('input[type="password"]');
+    expect((refreshedPasswordInputs[0] as HTMLInputElement | undefined)?.value).toBe("");
+    expect(view.container.textContent).toContain("sk-***123");
     expect(props.refreshProviders).toHaveBeenCalledTimes(2);
     expect(props.refreshModels).toHaveBeenCalledTimes(2);
-    expect(view.container.querySelector('.drawer-panel input[placeholder="输入新的 API Key"]')).toBeNull();
   });
 
   it("shows delete impact, requires confirmation text, and refreshes providers, models, and api keys after delete", async () => {
@@ -233,8 +311,15 @@ describe("ProvidersPage", () => {
     const otherProvider = buildProvider({
       id: "provider-2",
       name: "Backup Provider",
-      baseUrl: "https://backup.example/v1",
-      apiKeyPreview: "bk-***456"
+      openaiConfig: {
+        id: "provider-2-openai",
+        configured: true,
+        protocol: "openai",
+        baseUrl: "https://backup.example/v1",
+        testTimeoutMs: 10000,
+        apiVersion: null,
+        apiKeyPreview: "bk-***456"
+      }
     });
 
     providerApiMocks.remove.mockResolvedValue({
@@ -247,48 +332,40 @@ describe("ProvidersPage", () => {
 
     const modelA = buildModel({
       id: "model-a",
-      bindings: [
-        {
-          id: "binding-a",
-          providerId: provider.id,
-          providerName: provider.name,
-          upstreamModel: "gpt-4o",
-          inputPrice: 1,
-          outputPrice: 2,
-          enabled: true,
-          runtimePriority: 0,
-          defaultPriority: 0
-        }
-      ]
+      bindings: {
+        openai: [
+          buildBinding({
+            id: "binding-a",
+            providerId: provider.id,
+            providerName: provider.name
+          })
+        ],
+        anthropic: []
+      }
     });
+
     const modelB = buildModel({
       id: "model-b",
       alias: "gpt-4.1",
       displayName: "GPT 4.1",
-      bindings: [
-        {
-          id: "binding-b1",
-          providerId: provider.id,
-          providerName: provider.name,
-          upstreamModel: "gpt-4.1",
-          inputPrice: 1,
-          outputPrice: 2,
-          enabled: false,
-          runtimePriority: 0,
-          defaultPriority: 0
-        },
-        {
-          id: "binding-b2",
-          providerId: otherProvider.id,
-          providerName: otherProvider.name,
-          upstreamModel: "gpt-4.1-backup",
-          inputPrice: 1,
-          outputPrice: 2,
-          enabled: true,
-          runtimePriority: 1,
-          defaultPriority: 1
-        }
-      ]
+      bindings: {
+        openai: [
+          buildBinding({
+            id: "binding-b1",
+            providerId: provider.id,
+            providerName: provider.name,
+            enabled: false
+          }),
+          buildBinding({
+            id: "binding-b2",
+            providerId: otherProvider.id,
+            providerName: otherProvider.name,
+            runtimePriority: 1,
+            defaultPriority: 1
+          })
+        ],
+        anthropic: []
+      }
     });
 
     const { view, props } = await renderProvidersPage({
@@ -321,7 +398,7 @@ describe("ProvidersPage", () => {
     expect(props.refreshModels).toHaveBeenCalledTimes(1);
     expect(props.refreshApiKeys).toHaveBeenCalledTimes(1);
     expect(props.onNotice).toHaveBeenCalledWith(
-      expect.stringContaining("移除 2 条 binding，影响 2 个模型")
+      "Provider OpenAI Main 已删除，移除 2 条 binding，影响 2 个模型。"
     );
     expect(view.container.querySelector(".drawer-panel")).toBeNull();
   });

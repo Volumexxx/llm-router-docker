@@ -4,20 +4,20 @@ import type { z } from "zod";
 
 import type { GatewayApiKeyContext } from "../types.ts";
 import {
+  ANTHROPIC_API_VERSION,
   bindingCreateSchema,
   bindingUpdateSchema,
   modelAliasCreateSchema,
   modelAliasUpdateSchema,
-  providerProtocolSchema
+  type ProviderProtocol
 } from "../../../../packages/shared/src/index.ts";
 import { createId, nowIso } from "../lib/utils.ts";
-
-type ProviderProtocol = z.infer<typeof providerProtocolSchema>;
 
 export interface ModelBindingView {
   id: string;
   providerId: string;
   providerName: string;
+  protocol: ProviderProtocol;
   upstreamModel: string;
   inputPrice: number;
   outputPrice: number;
@@ -26,12 +26,17 @@ export interface ModelBindingView {
   defaultPriority: number;
 }
 
+export interface ModelBindingGroups {
+  openai: ModelBindingView[];
+  anthropic: ModelBindingView[];
+}
+
 export interface ModelAliasView {
   id: string;
   alias: string;
   displayName: string;
   enabled: boolean;
-  bindings: ModelBindingView[];
+  bindings: ModelBindingGroups;
 }
 
 export interface RoutableBinding {
@@ -55,6 +60,20 @@ type GatewayRoutingScope = Pick<
   "allowedProviderIds" | "allowedModelAliasIds"
 >;
 
+interface BindingRow {
+  id: string;
+  model_alias_id: string;
+  provider_id: string;
+  protocol: string;
+  upstream_model: string;
+  input_price: number;
+  output_price: number;
+  enabled: number;
+  runtime_priority: number;
+  default_priority: number;
+  provider_name: string;
+}
+
 export type RoutableBindingResolution =
   | {
       kind: "matched";
@@ -66,6 +85,55 @@ export type RoutableBindingResolution =
   | {
       kind: "scope_denied";
     };
+
+export class BindingProtocolConfigMissingError extends Error {
+  protocol: ProviderProtocol;
+  providerId: string;
+
+  constructor(providerId: string, protocol: ProviderProtocol) {
+    super(`Provider ${providerId} does not have a configured ${protocol} endpoint`);
+    this.name = "BindingProtocolConfigMissingError";
+    this.providerId = providerId;
+    this.protocol = protocol;
+  }
+}
+
+function normalizeProviderProtocol(value: string | null | undefined): ProviderProtocol {
+  return value === "anthropic" ? "anthropic" : "openai";
+}
+
+function emptyBindingGroups(): ModelBindingGroups {
+  return {
+    openai: [],
+    anthropic: []
+  };
+}
+
+function groupBindings(bindings: BindingRow[]): Map<string, ModelBindingGroups> {
+  const bindingMap = new Map<string, ModelBindingGroups>();
+
+  for (const binding of bindings) {
+    const groups = bindingMap.get(binding.model_alias_id) ?? emptyBindingGroups();
+    const protocol = normalizeProviderProtocol(binding.protocol);
+
+    groups[protocol].push({
+      id: binding.id,
+      providerId: binding.provider_id,
+      providerName: binding.provider_name,
+      protocol,
+      upstreamModel: binding.upstream_model,
+      inputPrice: Number(binding.input_price),
+      outputPrice: Number(binding.output_price),
+      enabled: Boolean(binding.enabled),
+      runtimePriority: binding.runtime_priority,
+      defaultPriority: binding.default_priority
+    });
+
+    bindingMap.set(binding.model_alias_id, groups);
+  }
+
+  return bindingMap;
+}
 
 export function listModels(sqlite: DatabaseSync): ModelAliasView[] {
   const models = sqlite
@@ -90,6 +158,7 @@ export function listModels(sqlite: DatabaseSync): ModelAliasView[] {
           model_bindings.id,
           model_bindings.model_alias_id,
           model_bindings.provider_id,
+          model_bindings.protocol,
           model_bindings.upstream_model,
           model_bindings.input_price,
           model_bindings.output_price,
@@ -99,46 +168,19 @@ export function listModels(sqlite: DatabaseSync): ModelAliasView[] {
           providers.name AS provider_name
         FROM model_bindings
         INNER JOIN providers ON providers.id = model_bindings.provider_id
-        ORDER BY model_bindings.runtime_priority ASC
+        ORDER BY model_bindings.protocol ASC, model_bindings.runtime_priority ASC
       `
     )
-    .all() as Array<{
-    id: string;
-    model_alias_id: string;
-    provider_id: string;
-    upstream_model: string;
-    input_price: number;
-    output_price: number;
-    enabled: number;
-    runtime_priority: number;
-    default_priority: number;
-    provider_name: string;
-  }>;
+    .all() as unknown as BindingRow[];
 
-  const bindingMap = new Map<string, ModelBindingView[]>();
-
-  for (const binding of bindings) {
-    const list = bindingMap.get(binding.model_alias_id) ?? [];
-    list.push({
-      id: binding.id,
-      providerId: binding.provider_id,
-      providerName: binding.provider_name,
-      upstreamModel: binding.upstream_model,
-      inputPrice: Number(binding.input_price),
-      outputPrice: Number(binding.output_price),
-      enabled: Boolean(binding.enabled),
-      runtimePriority: binding.runtime_priority,
-      defaultPriority: binding.default_priority
-    });
-    bindingMap.set(binding.model_alias_id, list);
-  }
+  const bindingMap = groupBindings(bindings);
 
   return models.map((model) => ({
     id: model.id,
     alias: model.alias,
     displayName: model.display_name,
     enabled: Boolean(model.enabled),
-    bindings: bindingMap.get(model.id) ?? []
+    bindings: bindingMap.get(model.id) ?? emptyBindingGroups()
   }));
 }
 
@@ -204,18 +246,45 @@ export function deleteModelAlias(sqlite: DatabaseSync, modelId: string): boolean
   return result.changes > 0;
 }
 
-function nextBindingPriority(sqlite: DatabaseSync, modelId: string): number {
+function nextBindingPriority(
+  sqlite: DatabaseSync,
+  modelId: string,
+  protocol: ProviderProtocol
+): number {
   const row = sqlite
     .prepare(
       `
         SELECT COALESCE(MAX(runtime_priority), -1) AS max_priority
         FROM model_bindings
         WHERE model_alias_id = ?
+          AND protocol = ?
       `
     )
-    .get(modelId) as { max_priority: number };
+    .get(modelId, protocol) as { max_priority: number };
 
   return row.max_priority + 1;
+}
+
+function assertProviderHasProtocolConfig(
+  sqlite: DatabaseSync,
+  providerId: string,
+  protocol: ProviderProtocol
+): void {
+  const row = sqlite
+    .prepare(
+      `
+        SELECT id
+        FROM provider_protocol_configs
+        WHERE provider_id = ?
+          AND protocol = ?
+        LIMIT 1
+      `
+    )
+    .get(providerId, protocol) as { id: string } | undefined;
+
+  if (!row) {
+    throw new BindingProtocolConfigMissingError(providerId, protocol);
+  }
 }
 
 export function createBinding(
@@ -223,7 +292,9 @@ export function createBinding(
   modelId: string,
   input: z.infer<typeof bindingCreateSchema>
 ): ModelAliasView | null {
-  const priority = nextBindingPriority(sqlite, modelId);
+  assertProviderHasProtocolConfig(sqlite, input.providerId, input.protocol);
+
+  const priority = nextBindingPriority(sqlite, modelId, input.protocol);
   const timestamp = nowIso();
 
   sqlite
@@ -233,6 +304,7 @@ export function createBinding(
           id,
           model_alias_id,
           provider_id,
+          protocol,
           upstream_model,
           input_price,
           output_price,
@@ -242,13 +314,14 @@ export function createBinding(
           created_at,
           updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `
     )
     .run(
       createId(),
       modelId,
       input.providerId,
+      input.protocol,
       input.upstreamModel,
       input.inputPrice,
       input.outputPrice,
@@ -333,6 +406,7 @@ export function deleteBinding(sqlite: DatabaseSync, modelId: string, bindingId: 
 export function applyRuntimeOrder(
   sqlite: DatabaseSync,
   modelId: string,
+  protocol: ProviderProtocol,
   bindingIds: string[]
 ): ModelAliasView | null {
   const timestamp = nowIso();
@@ -345,10 +419,10 @@ export function applyRuntimeOrder(
           `
             UPDATE model_bindings
             SET runtime_priority = ?, updated_at = ?
-            WHERE id = ? AND model_alias_id = ?
+            WHERE id = ? AND model_alias_id = ? AND protocol = ?
           `
         )
-        .run(index, timestamp, bindingId, modelId);
+        .run(index, timestamp, bindingId, modelId, protocol);
     });
     sqlite.exec("COMMIT");
   } catch (error) {
@@ -362,6 +436,7 @@ export function applyRuntimeOrder(
 export function saveRuntimeOrderAsDefault(
   sqlite: DatabaseSync,
   modelId: string,
+  protocol: ProviderProtocol,
   bindingIds: string[]
 ): ModelAliasView | null {
   if (!getModelById(sqlite, modelId)) {
@@ -380,10 +455,10 @@ export function saveRuntimeOrderAsDefault(
             SET runtime_priority = ?,
                 default_priority = ?,
                 updated_at = ?
-            WHERE id = ? AND model_alias_id = ?
+            WHERE id = ? AND model_alias_id = ? AND protocol = ?
           `
         )
-        .run(index, index, timestamp, bindingId, modelId);
+        .run(index, index, timestamp, bindingId, modelId, protocol);
     });
     sqlite.exec("COMMIT");
   } catch (error) {
@@ -429,7 +504,11 @@ function isBindingAllowedByScope(
   return true;
 }
 
-export function listVisibleModels(sqlite: DatabaseSync, gatewayScope?: GatewayRoutingScope) {
+export function listVisibleModels(
+  sqlite: DatabaseSync,
+  protocol: ProviderProtocol,
+  gatewayScope?: GatewayRoutingScope
+) {
   const scopeSets = buildScopeSets(gatewayScope);
   const rows = sqlite
     .prepare(
@@ -442,13 +521,17 @@ export function listVisibleModels(sqlite: DatabaseSync, gatewayScope?: GatewayRo
         FROM model_aliases
         INNER JOIN model_bindings ON model_bindings.model_alias_id = model_aliases.id
         INNER JOIN providers ON providers.id = model_bindings.provider_id
+        INNER JOIN provider_protocol_configs
+          ON provider_protocol_configs.provider_id = providers.id
+         AND provider_protocol_configs.protocol = model_bindings.protocol
         WHERE model_aliases.enabled = 1
           AND model_bindings.enabled = 1
           AND providers.enabled = 1
+          AND model_bindings.protocol = ?
         ORDER BY model_aliases.alias ASC, model_bindings.runtime_priority ASC
       `
     )
-    .all() as Array<{
+    .all(protocol) as Array<{
     alias: string;
     display_name: string;
     model_alias_id: string;
@@ -476,6 +559,7 @@ export function listVisibleModels(sqlite: DatabaseSync, gatewayScope?: GatewayRo
 export function resolveRoutableBinding(
   sqlite: DatabaseSync,
   alias: string,
+  protocol: ProviderProtocol,
   gatewayScope?: GatewayRoutingScope
 ): RoutableBindingResolution {
   const scopeSets = buildScopeSets(gatewayScope);
@@ -489,24 +573,28 @@ export function resolveRoutableBinding(
           model_aliases.display_name AS display_name,
           providers.id AS provider_id,
           providers.name AS provider_name,
-          providers.base_url AS provider_base_url,
-          providers.api_key_encrypted AS provider_api_key_encrypted,
-          providers.protocol AS provider_protocol,
-          providers.api_version AS provider_api_version,
+          provider_protocol_configs.base_url AS provider_base_url,
+          provider_protocol_configs.api_key_encrypted AS provider_api_key_encrypted,
+          provider_protocol_configs.protocol AS provider_protocol,
+          provider_protocol_configs.api_version AS provider_api_version,
           model_bindings.upstream_model AS upstream_model,
           model_bindings.input_price AS input_price,
           model_bindings.output_price AS output_price
         FROM model_aliases
         INNER JOIN model_bindings ON model_bindings.model_alias_id = model_aliases.id
         INNER JOIN providers ON providers.id = model_bindings.provider_id
+        INNER JOIN provider_protocol_configs
+          ON provider_protocol_configs.provider_id = providers.id
+         AND provider_protocol_configs.protocol = model_bindings.protocol
         WHERE model_aliases.alias = ?
           AND model_aliases.enabled = 1
           AND model_bindings.enabled = 1
           AND providers.enabled = 1
+          AND model_bindings.protocol = ?
         ORDER BY model_bindings.runtime_priority ASC
       `
     )
-    .all(alias) as Array<{
+    .all(alias, protocol) as Array<{
     binding_id: string;
     model_alias_id: string;
     model_alias: string;
@@ -535,6 +623,8 @@ export function resolveRoutableBinding(
     };
   }
 
+  const providerProtocol = normalizeProviderProtocol(matchedRow.provider_protocol);
+
   return {
     kind: "matched",
     binding: {
@@ -546,10 +636,10 @@ export function resolveRoutableBinding(
       providerName: matchedRow.provider_name,
       providerBaseUrl: matchedRow.provider_base_url,
       providerApiKeyEncrypted: matchedRow.provider_api_key_encrypted,
-      providerProtocol: matchedRow.provider_protocol === "anthropic" ? "anthropic" : "openai",
+      providerProtocol,
       providerApiVersion:
-        matchedRow.provider_protocol === "anthropic"
-          ? (matchedRow.provider_api_version ?? "2023-06-01")
+        providerProtocol === "anthropic"
+          ? (matchedRow.provider_api_version ?? ANTHROPIC_API_VERSION)
           : null,
       upstreamModel: matchedRow.upstream_model,
       inputPrice: Number(matchedRow.input_price),

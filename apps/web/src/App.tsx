@@ -5,11 +5,8 @@ import {
   api,
   type ApiKeyItem,
   type AuditResponse,
-  type BindingItem,
-  type BindingPayload,
   type DashboardSummary,
   type ModelItem,
-  type ProviderPayload,
   type ProviderItem,
   type SystemStatus
 } from "./lib/api.ts";
@@ -40,28 +37,39 @@ type ApiKeyDraft = {
   allowedModelAliasIds: string[];
 };
 
-const defaultProviderForm: ProviderPayload = {
-  name: "",
-  baseUrl: "",
-  apiKey: "",
-  protocol: "openai",
-  apiVersion: null,
-  enabled: true,
-  testTimeoutMs: 10000
-};
-
-const defaultModelForm = {
-  alias: "",
-  displayName: "",
-  enabled: true
-};
-
-const defaultBindingForm: BindingPayload = {
-  providerId: "",
-  upstreamModel: "",
-  inputPrice: 0,
-  outputPrice: 0,
-  enabled: true
+const sectionMeta: Record<
+  Section,
+  {
+    label: string;
+    title: string;
+    description: string;
+  }
+> = {
+  dashboard: {
+    label: "Dashboard",
+    title: "概览看板",
+    description: "查看请求趋势、成功率、成本和延迟，快速掌握 Provider、Model 和 API Key 的运行情况。"
+  },
+  providers: {
+    label: "Providers",
+    title: "Provider 管理",
+    description: "管理逻辑 Provider，并分别配置 OpenAI 与 Anthropic 两套上游连接。"
+  },
+  models: {
+    label: "Models & Routing",
+    title: "模型与路由",
+    description: "共享对外模型 alias，并在 OpenAI / Anthropic 两个协议标签下分别维护路由绑定。"
+  },
+  audit: {
+    label: "Audit",
+    title: "审计日志",
+    description: "按时间、状态、Provider、模型和 API Key 筛选请求记录，定位异常更直接。"
+  },
+  system: {
+    label: "System & API Keys",
+    title: "系统与 API Keys",
+    description: "查看系统状态、网关连通性和 API Key 授权范围，集中完成安全配置。"
+  }
 };
 
 function buildApiKeyDrafts(items: ApiKeyItem[]): Record<string, ApiKeyDraft> {
@@ -80,41 +88,6 @@ function buildApiKeyDrafts(items: ApiKeyItem[]): Record<string, ApiKeyDraft> {
   );
 }
 
-const sectionMeta: Record<
-  Section,
-  {
-    label: string;
-    title: string;
-    description: string;
-  }
-> = {
-  dashboard: {
-    label: "Dashboard",
-    title: "运行指标中心",
-    description: "查看整体运行态势，并从 Provider / Model / Key 三个维度深入分析。"
-  },
-  providers: {
-    label: "Providers",
-    title: "Provider 管理",
-    description: "维护上游连接信息、测试超时和密钥替换。"
-  },
-  models: {
-    label: "Models & Routing",
-    title: "模型与路由",
-    description: "在二级抽屉中维护模型别名、绑定关系和运行优先级。"
-  },
-  audit: {
-    label: "Audit",
-    title: "审计检索",
-    description: "按请求维度回溯模型调用、安全事件与 API Key 使用记录。"
-  },
-  system: {
-    label: "System & API Keys",
-    title: "系统与 API Keys",
-    description: "查看系统健康、创建 API Key，并在详情抽屉中配置权限范围。"
-  }
-};
-
 export default function App() {
   const [user, setUser] = useState<{ id: string; username: string } | null>(null);
   const [loading, setLoading] = useState(true);
@@ -123,11 +96,7 @@ export default function App() {
   const [notice, setNotice] = useState<string | null>(null);
 
   const [providers, setProviders] = useState<ProviderItem[]>([]);
-  const [newProvider, setNewProvider] = useState(defaultProviderForm);
-
   const [models, setModels] = useState<ModelItem[]>([]);
-  const [newModel, setNewModel] = useState(defaultModelForm);
-  const [bindingDrafts, setBindingDrafts] = useState<Record<string, BindingPayload>>({});
 
   const [dashboardRange, setDashboardRange] = useState<"day" | "week" | "month">("day");
   const [dashboardDayDate, setDashboardDayDate] = useState<string | null>(null);
@@ -245,25 +214,6 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (providers.length === 0) {
-      return;
-    }
-
-    setBindingDrafts((current) => {
-      const next = { ...current };
-      models.forEach((model) => {
-        if (!next[model.id]) {
-          next[model.id] = {
-            ...defaultBindingForm,
-            providerId: providers[0]?.id ?? ""
-          };
-        }
-      });
-      return next;
-    });
-  }, [models, providers]);
-
-  useEffect(() => {
     if (!user) {
       return;
     }
@@ -280,107 +230,8 @@ export default function App() {
     });
   };
 
-  const updateModelField = (modelId: string, field: keyof ModelItem, value: string | boolean) => {
-    setModels((current) =>
-      current.map((model) =>
-        model.id === modelId
-          ? {
-              ...model,
-              [field]: value
-            }
-          : model
-      )
-    );
-  };
-
-  const updateBindingField = (
-    modelId: string,
-    bindingId: string,
-    field: keyof BindingItem,
-    value: string | boolean | number
-  ) => {
-    setModels((current) =>
-      current.map((model) =>
-        model.id === modelId
-          ? {
-              ...model,
-              bindings: model.bindings.map((binding) =>
-                binding.id === bindingId
-                  ? {
-                      ...binding,
-                      [field]: value
-                    }
-                  : binding
-              )
-            }
-          : model
-      )
-    );
-  };
-
-  const moveBinding = (modelId: string, index: number, direction: -1 | 1) => {
-    setModels((current) =>
-      current.map((model) => {
-        if (model.id !== modelId) {
-          return model;
-        }
-
-        const nextBindings = [...model.bindings];
-        const targetIndex = index + direction;
-        if (targetIndex < 0 || targetIndex >= nextBindings.length) {
-          return model;
-        }
-
-        const [item] = nextBindings.splice(index, 1);
-        nextBindings.splice(targetIndex, 0, item);
-
-        return {
-          ...model,
-          bindings: nextBindings
-        };
-      })
-    );
-  };
-
-  const replaceBindingOrder = (modelId: string, bindingIds: string[]) => {
-    setModels((current) =>
-      current.map((model) => {
-        if (model.id !== modelId) {
-          return model;
-        }
-
-        const bindingById = new Map(model.bindings.map((binding) => [binding.id, binding]));
-        const reorderedBindings = bindingIds
-          .map((bindingId) => bindingById.get(bindingId))
-          .filter((binding): binding is BindingItem => Boolean(binding));
-
-        if (reorderedBindings.length !== model.bindings.length) {
-          return model;
-        }
-
-        return {
-          ...model,
-          bindings: reorderedBindings
-        };
-      })
-    );
-  };
-
-  const removeBindingFromState = (modelId: string, bindingId: string) => {
-    setModels((current) =>
-      current.map((model) =>
-        model.id === modelId
-          ? {
-              ...model,
-              bindings: model.bindings.filter((binding) => binding.id !== bindingId)
-            }
-          : model
-      )
-    );
-  };
-
   if (loading) {
-    return <main className="shell loading-state">正在加载管理台…</main>;
+    return <main className="shell loading-state">正在加载管理控制台...</main>;
   }
 
   if (!user) {
@@ -411,7 +262,7 @@ export default function App() {
           <div className="stack compact-stack">
             <p className="eyebrow">LLM Router</p>
             <h1>Public Router Console</h1>
-            <p className="muted">管理员：{user.username}</p>
+            <p className="muted">当前登录：{user.username}</p>
           </div>
 
           <nav className="nav">
@@ -439,7 +290,7 @@ export default function App() {
                 .catch(handleError);
             }}
           >
-            立即刷新
+            刷新数据
           </button>
           <button
             type="button"
@@ -484,8 +335,6 @@ export default function App() {
           <ProvidersPage
             providers={providers}
             models={models}
-            newProvider={newProvider}
-            setNewProvider={setNewProvider}
             refreshProviders={refreshProviders}
             refreshModels={refreshModels}
             refreshApiKeys={refreshApiKeys}
@@ -498,15 +347,6 @@ export default function App() {
           <ModelsPage
             models={models}
             providers={providers}
-            newModel={newModel}
-            setNewModel={setNewModel}
-            bindingDrafts={bindingDrafts}
-            setBindingDrafts={setBindingDrafts}
-            updateModelField={updateModelField}
-            updateBindingField={updateBindingField}
-            moveBinding={moveBinding}
-            replaceBindingOrder={replaceBindingOrder}
-            removeBindingFromState={removeBindingFromState}
             refreshModels={refreshModels}
             onNotice={handleNotice}
             onError={handleError}
@@ -540,7 +380,7 @@ export default function App() {
             createdApiKeyPlaintext={createdApiKeyPlaintext}
             onCreateApiKey={() => {
               if (!newApiKeyName.trim()) {
-                setError("请先输入 API Key 名称。");
+                setError("请输入 API Key 名称。");
                 return;
               }
 
@@ -559,7 +399,7 @@ export default function App() {
             onSaveApiKey={(apiKeyId) => {
               const draft = apiKeyDrafts[apiKeyId];
               if (!draft) {
-                setError("未找到待保存的 API Key 草稿。");
+                setError("未找到要保存的 API Key 草稿。");
                 return;
               }
 
@@ -572,14 +412,14 @@ export default function App() {
                 })
                 .then(async (response) => {
                   await Promise.all([refreshApiKeys(), refreshSystem()]);
-                  handleNotice(`API Key ${response.item.name} 已更新。`);
+                  handleNotice(`API Key ${response.item.name} 已保存。`);
                 })
                 .catch(handleError);
             }}
             onDeleteApiKey={(apiKeyId) => {
               const current = apiKeys.find((item) => item.id === apiKeyId);
               if (!current) {
-                setError("API Key 不存在。");
+                setError("未找到对应的 API Key。");
                 return;
               }
 

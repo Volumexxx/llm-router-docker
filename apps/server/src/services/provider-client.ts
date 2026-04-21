@@ -155,6 +155,7 @@ function buildUpstreamHeaders(
   const apiKey = decryptSecret(binding.providerApiKeyEncrypted, config.configEncryptionKey);
   if (binding.providerProtocol === "anthropic") {
     headers.set("x-api-key", apiKey);
+    headers.set("Authorization", `Bearer ${apiKey}`);
     headers.set("anthropic-version", binding.providerApiVersion ?? anthropicVersion ?? "2023-06-01");
     return headers;
   }
@@ -854,6 +855,7 @@ export async function testProviderConnection(
     const headers = new Headers();
     if (provider.protocol === "anthropic") {
       headers.set("x-api-key", provider.apiKey);
+      headers.set("Authorization", `Bearer ${provider.apiKey}`);
       headers.set("anthropic-version", provider.apiVersion ?? "2023-06-01");
     } else {
       headers.set("Authorization", `Bearer ${provider.apiKey}`);

@@ -1,63 +1,64 @@
-import { useEffect, useMemo, useState, type Dispatch, type SetStateAction } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { Drawer } from "../components/Drawer.tsx";
 import {
   api,
   type BindingItem,
   type BindingPayload,
+  type ModelBindings,
   type ModelItem,
-  type ProviderItem
+  type ProviderItem,
+  type ProviderProtocol
 } from "../lib/api.ts";
 
 interface ModelsPageProps {
   models: ModelItem[];
   providers: ProviderItem[];
-  newModel: {
-    alias: string;
-    displayName: string;
-    enabled: boolean;
-  };
-  setNewModel: Dispatch<
-    SetStateAction<{
-      alias: string;
-      displayName: string;
-      enabled: boolean;
-    }>
-  >;
-  bindingDrafts: Record<string, BindingPayload>;
-  setBindingDrafts: Dispatch<SetStateAction<Record<string, BindingPayload>>>;
-  updateModelField: (modelId: string, field: keyof ModelItem, value: string | boolean) => void;
-  updateBindingField: (
-    modelId: string,
-    bindingId: string,
-    field: keyof BindingItem,
-    value: string | boolean | number
-  ) => void;
-  moveBinding: (modelId: string, index: number, direction: -1 | 1) => void;
-  replaceBindingOrder: (modelId: string, bindingIds: string[]) => void;
-  removeBindingFromState: (modelId: string, bindingId: string) => void;
   refreshModels: () => Promise<void>;
   onNotice: (message: string) => void;
   onError: (reason: unknown) => void;
   setError: (message: string) => void;
 }
 
-const emptyModel = {
+type ModelDraft = {
+  alias: string;
+  displayName: string;
+  enabled: boolean;
+};
+
+type BindingDrafts = {
+  openai: BindingPayload;
+  anthropic: BindingPayload;
+};
+
+const emptyModelDraft: ModelDraft = {
   alias: "",
   displayName: "",
   enabled: true
 };
 
-const emptyBinding: BindingPayload = {
-  providerId: "",
-  upstreamModel: "",
-  inputPrice: 0,
-  outputPrice: 0,
-  enabled: true
-};
+function createEmptyBindingDraft(protocol: ProviderProtocol): BindingPayload {
+  return {
+    providerId: "",
+    protocol,
+    upstreamModel: "",
+    inputPrice: 0,
+    outputPrice: 0,
+    enabled: true
+  };
+}
 
-function areOrdersEqual(left: string[], right: string[]): boolean {
-  return left.length === right.length && left.every((id, index) => id === right[index]);
+function cloneBindings(bindings: ModelBindings): ModelBindings {
+  return {
+    openai: [...bindings.openai],
+    anthropic: [...bindings.anthropic]
+  };
+}
+
+function getProvidersForProtocol(providers: ProviderItem[], protocol: ProviderProtocol): ProviderItem[] {
+  return providers.filter((provider) =>
+    protocol === "anthropic" ? Boolean(provider.anthropicConfig) : Boolean(provider.openaiConfig)
+  );
 }
 
 function getBindingOrderByPriority(
@@ -75,24 +76,27 @@ function getBindingOrderByPriority(
     .map((binding) => binding.id);
 }
 
+function areOrdersEqual(left: string[], right: string[]): boolean {
+  return left.length === right.length && left.every((id, index) => id === right[index]);
+}
+
 export function ModelsPage({
   models,
   providers,
-  newModel,
-  setNewModel,
-  bindingDrafts,
-  setBindingDrafts,
-  updateModelField,
-  updateBindingField,
-  moveBinding,
-  replaceBindingOrder,
-  removeBindingFromState,
   refreshModels,
   onNotice,
   onError,
   setError
 }: ModelsPageProps) {
+  const [newModel, setNewModel] = useState<ModelDraft>(emptyModelDraft);
   const [selectedModelId, setSelectedModelId] = useState<string | null>(null);
+  const [selectedProtocol, setSelectedProtocol] = useState<ProviderProtocol>("openai");
+  const [modelDraft, setModelDraft] = useState<ModelDraft | null>(null);
+  const [bindingEditor, setBindingEditor] = useState<ModelBindings | null>(null);
+  const [bindingDrafts, setBindingDrafts] = useState<BindingDrafts>({
+    openai: createEmptyBindingDraft("openai"),
+    anthropic: createEmptyBindingDraft("anthropic")
+  });
 
   const selectedModel = useMemo(
     () => models.find((model) => model.id === selectedModelId) ?? null,
@@ -102,40 +106,109 @@ export function ModelsPage({
   useEffect(() => {
     if (selectedModelId && !selectedModel) {
       setSelectedModelId(null);
+      setModelDraft(null);
+      setBindingEditor(null);
+      return;
     }
+
+    if (!selectedModel) {
+      return;
+    }
+
+    setModelDraft({
+      alias: selectedModel.alias,
+      displayName: selectedModel.displayName,
+      enabled: selectedModel.enabled
+    });
+    setBindingEditor(cloneBindings(selectedModel.bindings));
   }, [selectedModel, selectedModelId]);
 
-  const ensureBindingDraft = (modelId: string) => {
-    setBindingDrafts((current) => {
-      if (current[modelId]) {
+  useEffect(() => {
+    const openaiProviders = getProvidersForProtocol(providers, "openai");
+    const anthropicProviders = getProvidersForProtocol(providers, "anthropic");
+
+    setBindingDrafts((current) => ({
+      openai: {
+        ...current.openai,
+        providerId:
+          current.openai.providerId && openaiProviders.some((provider) => provider.id === current.openai.providerId)
+            ? current.openai.providerId
+            : (openaiProviders[0]?.id ?? "")
+      },
+      anthropic: {
+        ...current.anthropic,
+        providerId:
+          current.anthropic.providerId &&
+          anthropicProviders.some((provider) => provider.id === current.anthropic.providerId)
+            ? current.anthropic.providerId
+            : (anthropicProviders[0]?.id ?? "")
+      }
+    }));
+  }, [providers]);
+
+  const currentBindings = bindingEditor?.[selectedProtocol] ?? [];
+  const runtimeOrder = getBindingOrderByPriority(currentBindings, "runtimePriority");
+  const defaultOrder = getBindingOrderByPriority(currentBindings, "defaultPriority");
+  const currentOrder = currentBindings.map((binding) => binding.id);
+  const isCurrentOrderDirtyFromRuntime = !areOrdersEqual(currentOrder, runtimeOrder);
+  const isCurrentOrderDirtyFromDefault = !areOrdersEqual(currentOrder, defaultOrder);
+  const protocolProviders = getProvidersForProtocol(providers, selectedProtocol);
+  const selectedBindingDraft = bindingDrafts[selectedProtocol];
+
+  const openModelDrawer = (model: ModelItem) => {
+    setSelectedModelId(model.id);
+    setSelectedProtocol("openai");
+    setModelDraft({
+      alias: model.alias,
+      displayName: model.displayName,
+      enabled: model.enabled
+    });
+    setBindingEditor(cloneBindings(model.bindings));
+  };
+
+  const reorderBindings = (protocol: ProviderProtocol, bindingIds: string[]) => {
+    setBindingEditor((current) => {
+      if (!current) {
+        return current;
+      }
+
+      const bindingById = new Map(current[protocol].map((binding) => [binding.id, binding]));
+      const reordered = bindingIds
+        .map((bindingId) => bindingById.get(bindingId))
+        .filter((binding): binding is BindingItem => Boolean(binding));
+
+      if (reordered.length !== current[protocol].length) {
         return current;
       }
 
       return {
         ...current,
-        [modelId]: {
-          ...emptyBinding,
-          providerId: providers[0]?.id ?? ""
-        }
+        [protocol]: reordered
       };
     });
   };
 
-  const openModelDrawer = (modelId: string) => {
-    ensureBindingDraft(modelId);
-    setSelectedModelId(modelId);
-  };
+  const moveBinding = (protocol: ProviderProtocol, index: number, direction: -1 | 1) => {
+    setBindingEditor((current) => {
+      if (!current) {
+        return current;
+      }
 
-  const selectedDraft = selectedModel ? bindingDrafts[selectedModel.id] : null;
-  const currentOrder = selectedModel?.bindings.map((binding) => binding.id) ?? [];
-  const runtimeOrder = selectedModel
-    ? getBindingOrderByPriority(selectedModel.bindings, "runtimePriority")
-    : [];
-  const defaultOrder = selectedModel
-    ? getBindingOrderByPriority(selectedModel.bindings, "defaultPriority")
-    : [];
-  const isCurrentOrderDirtyFromRuntime = !areOrdersEqual(currentOrder, runtimeOrder);
-  const isCurrentOrderDirtyFromDefault = !areOrdersEqual(currentOrder, defaultOrder);
+      const nextBindings = [...current[protocol]];
+      const targetIndex = index + direction;
+      if (targetIndex < 0 || targetIndex >= nextBindings.length) {
+        return current;
+      }
+
+      const [item] = nextBindings.splice(index, 1);
+      nextBindings.splice(targetIndex, 0, item);
+
+      return {
+        ...current,
+        [protocol]: nextBindings
+      };
+    });
+  };
 
   return (
     <div className="stack">
@@ -143,7 +216,7 @@ export function ModelsPage({
         <div className="panel-head">
           <div className="stack compact-stack">
             <h3>创建模型别名</h3>
-            <p className="muted">模型别名会暴露给外部调用方，具体路由绑定在二级配置抽屉中管理。</p>
+            <p className="muted">模型 alias 对外统一暴露，OpenAI 与 Anthropic 各自拥有独立的绑定和顺序。</p>
           </div>
         </div>
 
@@ -152,9 +225,7 @@ export function ModelsPage({
             <span>模型别名</span>
             <input
               value={newModel.alias}
-              onChange={(event) =>
-                setNewModel((current) => ({ ...current, alias: event.target.value }))
-              }
+              onChange={(event) => setNewModel((current) => ({ ...current, alias: event.target.value }))}
               placeholder="例如：gpt-4o-mini"
             />
           </label>
@@ -165,7 +236,7 @@ export function ModelsPage({
               onChange={(event) =>
                 setNewModel((current) => ({ ...current, displayName: event.target.value }))
               }
-              placeholder="例如：GPT-4o Mini"
+              placeholder="例如：GPT 4o Mini"
             />
           </label>
         </div>
@@ -174,9 +245,7 @@ export function ModelsPage({
           <input
             type="checkbox"
             checked={newModel.enabled}
-            onChange={(event) =>
-              setNewModel((current) => ({ ...current, enabled: event.target.checked }))
-            }
+            onChange={(event) => setNewModel((current) => ({ ...current, enabled: event.target.checked }))}
           />
           <span>创建后立即启用</span>
         </label>
@@ -189,7 +258,7 @@ export function ModelsPage({
               void api.models
                 .create(newModel)
                 .then(async () => {
-                  setNewModel(emptyModel);
+                  setNewModel(emptyModelDraft);
                   await refreshModels();
                   onNotice("模型别名已创建。");
                 })
@@ -205,7 +274,7 @@ export function ModelsPage({
         <div className="panel-head">
           <div className="stack compact-stack">
             <h3>模型与路由</h3>
-            <p className="muted">列表页展示摘要信息，点击“配置”进入模型详情抽屉。</p>
+            <p className="muted">点击“配置”进入详情抽屉，在 OpenAI / Anthropic 标签下分别维护 binding。</p>
           </div>
           <span className="pill">{models.length} 个模型</span>
         </div>
@@ -231,7 +300,9 @@ export function ModelsPage({
                 </tr>
               ) : (
                 models.map((model) => {
-                  const enabledBindingCount = model.bindings.filter((binding) => binding.enabled).length;
+                  const allBindings = [...model.bindings.openai, ...model.bindings.anthropic];
+                  const enabledBindingCount = allBindings.filter((binding) => binding.enabled).length;
+
                   return (
                     <tr key={model.id}>
                       <td>{model.alias}</td>
@@ -241,13 +312,13 @@ export function ModelsPage({
                           {model.enabled ? "启用中" : "已停用"}
                         </span>
                       </td>
-                      <td>{model.bindings.length}</td>
+                      <td>{allBindings.length}</td>
                       <td>{enabledBindingCount}</td>
                       <td>
                         <button
                           type="button"
                           className="secondary"
-                          onClick={() => openModelDrawer(model.id)}
+                          onClick={() => openModelDrawer(model)}
                         >
                           配置
                         </button>
@@ -262,23 +333,27 @@ export function ModelsPage({
       </section>
 
       <Drawer
-        open={Boolean(selectedModel)}
+        open={Boolean(selectedModel && modelDraft && bindingEditor)}
         size="xl"
         title={selectedModel ? `模型配置 · ${selectedModel.alias}` : ""}
         subtitle={
           selectedModel
-            ? "在当前抽屉中维护模型基本信息、Provider 绑定与优先级顺序。"
+            ? "基础信息全局共享，OpenAI 与 Anthropic 在各自标签页里维护绑定、顺序和新增入口。"
             : undefined
         }
-        onClose={() => setSelectedModelId(null)}
+        onClose={() => {
+          setSelectedModelId(null);
+          setModelDraft(null);
+          setBindingEditor(null);
+        }}
       >
-        {selectedModel ? (
+        {selectedModel && modelDraft && bindingEditor ? (
           <div className="stack">
             <section className="panel panel-elevated">
               <div className="panel-head">
                 <div className="stack compact-stack">
                   <h4>基础设置</h4>
-                  <p className="muted">更新模型别名、显示名和启用状态。</p>
+                  <p className="muted">模型 alias 对外共享，不区分协议。</p>
                 </div>
               </div>
 
@@ -286,18 +361,16 @@ export function ModelsPage({
                 <label>
                   <span>模型别名</span>
                   <input
-                    value={selectedModel.alias}
-                    onChange={(event) =>
-                      updateModelField(selectedModel.id, "alias", event.target.value)
-                    }
+                    value={modelDraft.alias}
+                    onChange={(event) => setModelDraft((current) => (current ? { ...current, alias: event.target.value } : current))}
                   />
                 </label>
                 <label>
                   <span>显示名称</span>
                   <input
-                    value={selectedModel.displayName}
+                    value={modelDraft.displayName}
                     onChange={(event) =>
-                      updateModelField(selectedModel.id, "displayName", event.target.value)
+                      setModelDraft((current) => (current ? { ...current, displayName: event.target.value } : current))
                     }
                   />
                 </label>
@@ -306,9 +379,9 @@ export function ModelsPage({
               <label className="inline">
                 <input
                   type="checkbox"
-                  checked={selectedModel.enabled}
+                  checked={modelDraft.enabled}
                   onChange={(event) =>
-                    updateModelField(selectedModel.id, "enabled", event.target.checked)
+                    setModelDraft((current) => (current ? { ...current, enabled: event.target.checked } : current))
                   }
                 />
                 <span>模型启用</span>
@@ -320,14 +393,10 @@ export function ModelsPage({
                   className="primary"
                   onClick={() => {
                     void api.models
-                      .update(selectedModel.id, {
-                        alias: selectedModel.alias,
-                        displayName: selectedModel.displayName,
-                        enabled: selectedModel.enabled
-                      })
+                      .update(selectedModel.id, modelDraft)
                       .then(async () => {
                         await refreshModels();
-                        onNotice(`模型 ${selectedModel.alias} 已更新。`);
+                        onNotice(`模型 ${modelDraft.alias} 已更新。`);
                       })
                       .catch(onError);
                   }}
@@ -346,6 +415,8 @@ export function ModelsPage({
                       .remove(selectedModel.id)
                       .then(async () => {
                         setSelectedModelId(null);
+                        setModelDraft(null);
+                        setBindingEditor(null);
                         await refreshModels();
                         onNotice(`模型 ${selectedModel.alias} 已删除。`);
                       })
@@ -360,8 +431,30 @@ export function ModelsPage({
             <section className="panel panel-elevated">
               <div className="panel-head">
                 <div className="stack compact-stack">
-                  <h4>路由绑定</h4>
-                  <p className="muted">运行顺序越靠前，优先级越高。先拖动顺序，再点击“应用当前顺序”。</p>
+                  <h4>协议标签</h4>
+                  <p className="muted">在不同协议标签下，绑定列表、顺序和新增入口彼此独立。</p>
+                </div>
+              </div>
+
+              <div className="protocol-tabs">
+                {(["openai", "anthropic"] as ProviderProtocol[]).map((protocol) => (
+                  <button
+                    key={protocol}
+                    type="button"
+                    className={selectedProtocol === protocol ? "chip active" : "chip"}
+                    onClick={() => setSelectedProtocol(protocol)}
+                  >
+                    {protocol === "anthropic" ? "Anthropic" : "OpenAI"}
+                  </button>
+                ))}
+              </div>
+            </section>
+
+            <section className="panel panel-elevated">
+              <div className="panel-head">
+                <div className="stack compact-stack">
+                  <h4>{selectedProtocol === "anthropic" ? "Anthropic 路由绑定" : "OpenAI 路由绑定"}</h4>
+                  <p className="muted">当前标签内的排序越靠前，运行时优先级越高。</p>
                 </div>
               </div>
 
@@ -379,14 +472,18 @@ export function ModelsPage({
                     </tr>
                   </thead>
                   <tbody>
-                    {selectedModel.bindings.length === 0 ? (
+                    {currentBindings.length === 0 ? (
                       <tr>
                         <td colSpan={7}>
-                          <div className="table-empty">当前模型还没有绑定任何 Provider。</div>
+                          <div className="table-empty">
+                            {selectedProtocol === "anthropic"
+                              ? "当前模型还没有 Anthropic 路由绑定。"
+                              : "当前模型还没有 OpenAI 路由绑定。"}
+                          </div>
                         </td>
                       </tr>
                     ) : (
-                      selectedModel.bindings.map((binding, index) => (
+                      currentBindings.map((binding, index) => (
                         <tr key={binding.id}>
                           <td>
                             <div className="binding-order-controls">
@@ -394,14 +491,14 @@ export function ModelsPage({
                               <button
                                 type="button"
                                 className="chip"
-                                onClick={() => moveBinding(selectedModel.id, index, -1)}
+                                onClick={() => moveBinding(selectedProtocol, index, -1)}
                               >
                                 上移
                               </button>
                               <button
                                 type="button"
                                 className="chip"
-                                onClick={() => moveBinding(selectedModel.id, index, 1)}
+                                onClick={() => moveBinding(selectedProtocol, index, 1)}
                               >
                                 下移
                               </button>
@@ -412,11 +509,17 @@ export function ModelsPage({
                             <input
                               value={binding.upstreamModel}
                               onChange={(event) =>
-                                updateBindingField(
-                                  selectedModel.id,
-                                  binding.id,
-                                  "upstreamModel",
-                                  event.target.value
+                                setBindingEditor((current) =>
+                                  current
+                                    ? {
+                                        ...current,
+                                        [selectedProtocol]: current[selectedProtocol].map((item) =>
+                                          item.id === binding.id
+                                            ? { ...item, upstreamModel: event.target.value }
+                                            : item
+                                        )
+                                      }
+                                    : current
                                 )
                               }
                             />
@@ -427,11 +530,17 @@ export function ModelsPage({
                               step="0.0001"
                               value={binding.inputPrice}
                               onChange={(event) =>
-                                updateBindingField(
-                                  selectedModel.id,
-                                  binding.id,
-                                  "inputPrice",
-                                  Number(event.target.value)
+                                setBindingEditor((current) =>
+                                  current
+                                    ? {
+                                        ...current,
+                                        [selectedProtocol]: current[selectedProtocol].map((item) =>
+                                          item.id === binding.id
+                                            ? { ...item, inputPrice: Number(event.target.value) }
+                                            : item
+                                        )
+                                      }
+                                    : current
                                 )
                               }
                             />
@@ -442,11 +551,17 @@ export function ModelsPage({
                               step="0.0001"
                               value={binding.outputPrice}
                               onChange={(event) =>
-                                updateBindingField(
-                                  selectedModel.id,
-                                  binding.id,
-                                  "outputPrice",
-                                  Number(event.target.value)
+                                setBindingEditor((current) =>
+                                  current
+                                    ? {
+                                        ...current,
+                                        [selectedProtocol]: current[selectedProtocol].map((item) =>
+                                          item.id === binding.id
+                                            ? { ...item, outputPrice: Number(event.target.value) }
+                                            : item
+                                        )
+                                      }
+                                    : current
                                 )
                               }
                             />
@@ -456,11 +571,17 @@ export function ModelsPage({
                               type="checkbox"
                               checked={binding.enabled}
                               onChange={(event) =>
-                                updateBindingField(
-                                  selectedModel.id,
-                                  binding.id,
-                                  "enabled",
-                                  event.target.checked
+                                setBindingEditor((current) =>
+                                  current
+                                    ? {
+                                        ...current,
+                                        [selectedProtocol]: current[selectedProtocol].map((item) =>
+                                          item.id === binding.id
+                                            ? { ...item, enabled: event.target.checked }
+                                            : item
+                                        )
+                                      }
+                                    : current
                                 )
                               }
                             />
@@ -497,9 +618,8 @@ export function ModelsPage({
 
                                   void api.models
                                     .removeBinding(selectedModel.id, binding.id)
-                                    .then(() => {
-                                      removeBindingFromState(selectedModel.id, binding.id);
-                                      void refreshModels().catch(onError);
+                                    .then(async () => {
+                                      await refreshModels();
                                       onNotice(`绑定 ${binding.providerName} 已移除。`);
                                     })
                                     .catch(onError);
@@ -523,10 +643,12 @@ export function ModelsPage({
                   disabled={!isCurrentOrderDirtyFromRuntime}
                   onClick={() => {
                     void api.models
-                      .applyRuntimeOrder(selectedModel.id, currentOrder)
+                      .applyRuntimeOrder(selectedModel.id, selectedProtocol, currentOrder)
                       .then(async () => {
                         await refreshModels();
-                        onNotice(`模型 ${selectedModel.alias} 的运行顺序已应用。`);
+                        onNotice(
+                          `${selectedProtocol === "anthropic" ? "Anthropic" : "OpenAI"} 运行顺序已应用。`
+                        );
                       })
                       .catch(onError);
                   }}
@@ -537,9 +659,7 @@ export function ModelsPage({
                   type="button"
                   className="ghost"
                   disabled={!isCurrentOrderDirtyFromDefault}
-                  onClick={() => {
-                    replaceBindingOrder(selectedModel.id, defaultOrder);
-                  }}
+                  onClick={() => reorderBindings(selectedProtocol, defaultOrder)}
                 >
                   恢复默认
                 </button>
@@ -549,10 +669,12 @@ export function ModelsPage({
                   disabled={!isCurrentOrderDirtyFromDefault}
                   onClick={() => {
                     void api.models
-                      .saveDefaultOrder(selectedModel.id, currentOrder)
+                      .saveDefaultOrder(selectedModel.id, selectedProtocol, currentOrder)
                       .then(async () => {
                         await refreshModels();
-                        onNotice(`模型 ${selectedModel.alias} 的默认顺序已保存。`);
+                        onNotice(
+                          `${selectedProtocol === "anthropic" ? "Anthropic" : "OpenAI"} 默认顺序已保存。`
+                        );
                       })
                       .catch(onError);
                   }}
@@ -565,8 +687,8 @@ export function ModelsPage({
             <section className="panel panel-elevated">
               <div className="panel-head">
                 <div className="stack compact-stack">
-                  <h4>新增绑定</h4>
-                  <p className="muted">配置完后会自动加入当前模型的绑定列表。</p>
+                  <h4>{selectedProtocol === "anthropic" ? "新增 Anthropic 绑定" : "新增 OpenAI 绑定"}</h4>
+                  <p className="muted">Provider 下拉只显示当前协议已配置完成的逻辑 Provider。</p>
                 </div>
               </div>
 
@@ -574,71 +696,71 @@ export function ModelsPage({
                 <label>
                   <span>Provider</span>
                   <select
-                    value={selectedDraft?.providerId ?? providers[0]?.id ?? ""}
+                    value={selectedBindingDraft.providerId}
                     onChange={(event) =>
                       setBindingDrafts((current) => ({
                         ...current,
-                        [selectedModel.id]: {
-                          ...(current[selectedModel.id] ?? emptyBinding),
+                        [selectedProtocol]: {
+                          ...current[selectedProtocol],
                           providerId: event.target.value
                         }
                       }))
                     }
                   >
                     <option value="">请选择</option>
-                    {providers.map((provider) => (
+                    {protocolProviders.map((provider) => (
                       <option key={provider.id} value={provider.id}>
                         {provider.name}
                       </option>
                     ))}
                   </select>
                 </label>
+
                 <label>
                   <span>上游模型名</span>
                   <input
-                    value={selectedDraft?.upstreamModel ?? ""}
+                    value={selectedBindingDraft.upstreamModel}
                     onChange={(event) =>
                       setBindingDrafts((current) => ({
                         ...current,
-                        [selectedModel.id]: {
-                          ...(current[selectedModel.id] ?? emptyBinding),
-                          providerId: current[selectedModel.id]?.providerId ?? providers[0]?.id ?? "",
+                        [selectedProtocol]: {
+                          ...current[selectedProtocol],
                           upstreamModel: event.target.value
                         }
                       }))
                     }
                   />
                 </label>
+
                 <label>
                   <span>输入价 / 百万 Tokens</span>
                   <input
                     type="number"
                     step="0.0001"
-                    value={selectedDraft?.inputPrice ?? 0}
+                    value={selectedBindingDraft.inputPrice}
                     onChange={(event) =>
                       setBindingDrafts((current) => ({
                         ...current,
-                        [selectedModel.id]: {
-                          ...(current[selectedModel.id] ?? emptyBinding),
-                          providerId: current[selectedModel.id]?.providerId ?? providers[0]?.id ?? "",
+                        [selectedProtocol]: {
+                          ...current[selectedProtocol],
                           inputPrice: Number(event.target.value)
                         }
                       }))
                     }
                   />
                 </label>
+
                 <label>
                   <span>输出价 / 百万 Tokens</span>
                   <input
                     type="number"
                     step="0.0001"
-                    value={selectedDraft?.outputPrice ?? 0}
+                    value={selectedBindingDraft.outputPrice}
                     onChange={(event) =>
                       setBindingDrafts((current) => ({
                         ...current,
-                        [selectedModel.id]: {
-                          ...(current[selectedModel.id] ?? emptyBinding),
-                          providerId: current[selectedModel.id]?.providerId ?? providers[0]?.id ?? "",
+                        [selectedProtocol]: {
+                          ...current[selectedProtocol],
                           outputPrice: Number(event.target.value)
                         }
                       }))
@@ -650,13 +772,12 @@ export function ModelsPage({
               <label className="inline">
                 <input
                   type="checkbox"
-                  checked={selectedDraft?.enabled ?? true}
+                  checked={selectedBindingDraft.enabled}
                   onChange={(event) =>
                     setBindingDrafts((current) => ({
                       ...current,
-                      [selectedModel.id]: {
-                        ...(current[selectedModel.id] ?? emptyBinding),
-                        providerId: current[selectedModel.id]?.providerId ?? providers[0]?.id ?? "",
+                      [selectedProtocol]: {
+                        ...current[selectedProtocol],
                         enabled: event.target.checked
                       }
                     }))
@@ -670,24 +791,25 @@ export function ModelsPage({
                   type="button"
                   className="primary"
                   onClick={() => {
-                    const draft = bindingDrafts[selectedModel.id];
-                    if (!draft?.providerId || !draft.upstreamModel.trim()) {
+                    if (!selectedBindingDraft.providerId || !selectedBindingDraft.upstreamModel.trim()) {
                       setError("请先填写完整的 Provider 和上游模型名。");
                       return;
                     }
 
                     void api.models
-                      .addBinding(selectedModel.id, draft)
+                      .addBinding(selectedModel.id, selectedBindingDraft)
                       .then(async () => {
                         setBindingDrafts((current) => ({
                           ...current,
-                          [selectedModel.id]: {
-                            ...emptyBinding,
-                            providerId: providers[0]?.id ?? ""
+                          [selectedProtocol]: {
+                            ...createEmptyBindingDraft(selectedProtocol),
+                            providerId: protocolProviders[0]?.id ?? ""
                           }
                         }));
                         await refreshModels();
-                        onNotice(`已为 ${selectedModel.alias} 新增绑定。`);
+                        onNotice(
+                          `${selectedProtocol === "anthropic" ? "Anthropic" : "OpenAI"} 绑定已新增。`
+                        );
                       })
                       .catch(onError);
                   }}

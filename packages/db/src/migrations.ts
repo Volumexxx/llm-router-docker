@@ -182,5 +182,108 @@ export const migrations: SqlMigration[] = [
       ALTER TABLE providers ADD COLUMN protocol TEXT NOT NULL DEFAULT 'openai';
       ALTER TABLE providers ADD COLUMN api_version TEXT;
     `
+  },
+  {
+    version: "005_logical_providers_and_protocol_bindings",
+    sql: `
+      CREATE TABLE IF NOT EXISTS provider_protocol_configs (
+        id TEXT PRIMARY KEY NOT NULL,
+        provider_id TEXT NOT NULL,
+        protocol TEXT NOT NULL,
+        base_url TEXT NOT NULL,
+        api_key_encrypted TEXT NOT NULL,
+        test_timeout_ms INTEGER NOT NULL DEFAULT 10000,
+        api_version TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(provider_id, protocol),
+        FOREIGN KEY(provider_id) REFERENCES providers(id) ON DELETE CASCADE
+      );
+
+      INSERT OR IGNORE INTO provider_protocol_configs (
+        id,
+        provider_id,
+        protocol,
+        base_url,
+        api_key_encrypted,
+        test_timeout_ms,
+        api_version,
+        created_at,
+        updated_at
+      )
+      SELECT
+        providers.id || ':' || providers.protocol,
+        providers.id,
+        providers.protocol,
+        providers.base_url,
+        providers.api_key_encrypted,
+        providers.test_timeout_ms,
+        providers.api_version,
+        providers.created_at,
+        providers.updated_at
+      FROM providers;
+
+      CREATE INDEX IF NOT EXISTS idx_provider_protocol_configs_provider_id
+      ON provider_protocol_configs(provider_id);
+
+      CREATE TABLE model_bindings_next (
+        id TEXT PRIMARY KEY NOT NULL,
+        model_alias_id TEXT NOT NULL,
+        provider_id TEXT NOT NULL,
+        protocol TEXT NOT NULL DEFAULT 'openai',
+        upstream_model TEXT NOT NULL,
+        input_price REAL NOT NULL DEFAULT 0,
+        output_price REAL NOT NULL DEFAULT 0,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        runtime_priority INTEGER NOT NULL DEFAULT 0,
+        default_priority INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(model_alias_id, provider_id, protocol),
+        FOREIGN KEY(model_alias_id) REFERENCES model_aliases(id) ON DELETE CASCADE,
+        FOREIGN KEY(provider_id) REFERENCES providers(id) ON DELETE RESTRICT
+      );
+
+      INSERT INTO model_bindings_next (
+        id,
+        model_alias_id,
+        provider_id,
+        protocol,
+        upstream_model,
+        input_price,
+        output_price,
+        enabled,
+        runtime_priority,
+        default_priority,
+        created_at,
+        updated_at
+      )
+      SELECT
+        model_bindings.id,
+        model_bindings.model_alias_id,
+        model_bindings.provider_id,
+        COALESCE(providers.protocol, 'openai'),
+        model_bindings.upstream_model,
+        model_bindings.input_price,
+        model_bindings.output_price,
+        model_bindings.enabled,
+        model_bindings.runtime_priority,
+        model_bindings.default_priority,
+        model_bindings.created_at,
+        model_bindings.updated_at
+      FROM model_bindings
+      INNER JOIN providers ON providers.id = model_bindings.provider_id;
+
+      DROP TABLE model_bindings;
+      ALTER TABLE model_bindings_next RENAME TO model_bindings;
+
+      CREATE INDEX IF NOT EXISTS idx_model_bindings_model_priority
+      ON model_bindings(model_alias_id, protocol, runtime_priority);
+
+      ALTER TABLE audit_logs ADD COLUMN provider_protocol TEXT;
+
+      CREATE INDEX IF NOT EXISTS idx_audit_logs_provider_protocol
+      ON audit_logs(provider_protocol);
+    `
   }
 ];

@@ -197,6 +197,8 @@ async function createProvider(
     testTimeoutMs?: number;
   }
 ) {
+  const protocol = input.protocol ?? "openai";
+  const testTimeoutMs = input.testTimeoutMs ?? 10000;
   const response = await app.inject({
     method: "POST",
     url: "/admin/api/providers",
@@ -204,12 +206,21 @@ async function createProvider(
       cookie
     },
     payload: {
-      apiKey: input.apiKey ?? "provider-secret",
-      protocol: input.protocol ?? "openai",
-      apiVersion: input.apiVersion,
+      name: input.name,
       enabled: input.enabled ?? true,
-      testTimeoutMs: input.testTimeoutMs ?? 10000,
-      ...input
+      [protocol]:
+        protocol === "anthropic"
+          ? {
+              baseUrl: input.baseUrl,
+              apiKey: input.apiKey ?? "provider-secret",
+              testTimeoutMs,
+              apiVersion: input.apiVersion ?? "2023-06-01"
+            }
+          : {
+              baseUrl: input.baseUrl,
+              apiKey: input.apiKey ?? "provider-secret",
+              testTimeoutMs
+            }
     }
   });
 
@@ -217,9 +228,16 @@ async function createProvider(
   return response.json().item as {
     id: string;
     name: string;
-    baseUrl: string;
-    protocol: "openai" | "anthropic";
-    apiVersion: string | null;
+    openaiConfig: {
+      protocol: "openai";
+      baseUrl: string;
+      apiVersion: null;
+    } | null;
+    anthropicConfig: {
+      protocol: "anthropic";
+      baseUrl: string;
+      apiVersion: string | null;
+    } | null;
   };
 }
 
@@ -258,6 +276,7 @@ async function addBinding(
   modelId: string,
   input: {
     providerId: string;
+    protocol?: "openai" | "anthropic";
     upstreamModel: string;
     inputPrice?: number;
     outputPrice?: number;
@@ -271,6 +290,7 @@ async function addBinding(
       cookie
     },
     payload: {
+      protocol: input.protocol ?? "openai",
       inputPrice: input.inputPrice ?? 1,
       outputPrice: input.outputPrice ?? 1,
       enabled: input.enabled ?? true,
@@ -282,7 +302,20 @@ async function addBinding(
   return response.json().item as {
     id: string;
     alias: string;
-    bindings: Array<{ id: string; providerName: string }>;
+    bindings: {
+      openai: Array<{
+        id: string;
+        providerName: string;
+        runtimePriority: number;
+        defaultPriority: number;
+      }>;
+      anthropic: Array<{
+        id: string;
+        providerName: string;
+        runtimePriority: number;
+        defaultPriority: number;
+      }>;
+    };
   };
 }
 
@@ -319,26 +352,18 @@ describe("llm router server", () => {
 
     try {
       const cookie = await login(app);
-      const response = await app.inject({
-        method: "POST",
-        url: "/admin/api/providers",
-        headers: {
-          cookie
-        },
-        payload: {
-          name: "claude-primary",
-          baseUrl: "https://api.anthropic.com",
-          apiKey: "anthropic-secret",
-          protocol: "anthropic",
-          apiVersion: "2023-06-01",
-          enabled: true,
-          testTimeoutMs: 12000
-        }
+      const provider = await createProvider(app, cookie, {
+        name: "claude-primary",
+        baseUrl: "https://api.anthropic.com",
+        apiKey: "anthropic-secret",
+        protocol: "anthropic",
+        apiVersion: "2023-06-01",
+        enabled: true,
+        testTimeoutMs: 12000
       });
 
-      expect(response.statusCode).toBe(201);
-      expect(response.json().item.protocol).toBe("anthropic");
-      expect(response.json().item.apiVersion).toBe("2023-06-01");
+      expect(provider.anthropicConfig?.protocol).toBe("anthropic");
+      expect(provider.anthropicConfig?.apiVersion).toBe("2023-06-01");
 
       const list = await app.inject({
         method: "GET",
@@ -349,8 +374,8 @@ describe("llm router server", () => {
       });
 
       expect(list.statusCode).toBe(200);
-      expect(list.json().items[0].protocol).toBe("anthropic");
-      expect(list.json().items[0].apiVersion).toBe("2023-06-01");
+      expect(list.json().items[0].anthropicConfig.protocol).toBe("anthropic");
+      expect(list.json().items[0].anthropicConfig.apiVersion).toBe("2023-06-01");
     } finally {
       await app.close();
     }
@@ -361,38 +386,30 @@ describe("llm router server", () => {
 
     try {
       const cookie = await login(app);
-      const response = await app.inject({
-        method: "POST",
-        url: "/admin/api/providers",
-        headers: {
-          cookie
-        },
-        payload: {
-          name: "openai-compatible",
-          baseUrl: "https://provider.example/v1",
-          apiKey: "provider-secret",
-          protocol: "openai",
-          apiVersion: null,
-          enabled: true,
-          testTimeoutMs: 10000
-        }
+      const provider = await createProvider(app, cookie, {
+        name: "openai-compatible",
+        baseUrl: "https://provider.example/v1",
+        apiKey: "provider-secret",
+        protocol: "openai",
+        apiVersion: null,
+        enabled: true,
+        testTimeoutMs: 10000
       });
 
-      expect(response.statusCode).toBe(201);
-      expect(response.json().item.protocol).toBe("openai");
-      expect(response.json().item.apiVersion).toBeNull();
+      expect(provider.openaiConfig?.protocol).toBe("openai");
+      expect(provider.openaiConfig?.apiVersion).toBeNull();
     } finally {
       await app.close();
     }
   });
 
-  it("tests Anthropic providers with x-api-key and anthropic-version", async () => {
+  it("tests Anthropic providers with bearer and x-api-key headers", async () => {
     const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       expect(String(input)).toBe("https://api.anthropic.com/v1/models");
       const headers = new Headers(init?.headers);
       expect(headers.get("x-api-key")).toBe("anthropic-secret");
+      expect(headers.get("authorization")).toBe("Bearer anthropic-secret");
       expect(headers.get("anthropic-version")).toBe("2023-06-01");
-      expect(headers.get("authorization")).toBeNull();
 
       return new Response(
         JSON.stringify({
@@ -424,6 +441,9 @@ describe("llm router server", () => {
         url: `/admin/api/providers/${provider.id}/test`,
         headers: {
           cookie
+        },
+        payload: {
+          protocol: "anthropic"
         }
       });
 
@@ -453,6 +473,7 @@ describe("llm router server", () => {
 
       await addBinding(app, cookie, model.id, {
         providerId: provider.id,
+        protocol: "anthropic",
         upstreamModel: "claude-sonnet-4-5"
       });
 
@@ -478,6 +499,48 @@ describe("llm router server", () => {
     }
   });
 
+  it("accepts authorization bearer tokens for anthropic-compatible gateway clients", async () => {
+    const app = await createTestApp();
+
+    try {
+      const cookie = await login(app);
+      const provider = await createProvider(app, cookie, {
+        name: "claude-gateway-auth",
+        baseUrl: "https://api.anthropic.com",
+        protocol: "anthropic",
+        apiVersion: "2023-06-01"
+      });
+      const model = await createModel(app, cookie, {
+        alias: "claude-gateway-model",
+        displayName: "Claude Gateway Model"
+      });
+
+      await addBinding(app, cookie, model.id, {
+        providerId: provider.id,
+        protocol: "anthropic",
+        upstreamModel: "claude-sonnet-4-5"
+      });
+
+      const apiKey = await createGatewayApiKey(app, cookie, {
+        name: "anthropic-bearer-client"
+      });
+
+      const response = await app.inject({
+        method: "GET",
+        url: "/v1/models",
+        headers: {
+          authorization: `Bearer ${apiKey.plaintext}`,
+          "anthropic-version": "2023-06-01"
+        }
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json().data[0].id).toBe("claude-gateway-model");
+    } finally {
+      await app.close();
+    }
+  });
+
   it("proxies anthropic messages to anthropic providers", async () => {
     const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
@@ -491,6 +554,7 @@ describe("llm router server", () => {
         };
 
         expect(headers.get("x-api-key")).toBe("provider-secret");
+        expect(headers.get("authorization")).toBe("Bearer provider-secret");
         expect(headers.get("anthropic-version")).toBe("2023-06-01");
         expect(payload.model).toBe("claude-sonnet-4-5");
         expect(payload.max_tokens).toBe(128);
@@ -548,6 +612,7 @@ describe("llm router server", () => {
 
       await addBinding(app, cookie, model.id, {
         providerId: provider.id,
+        protocol: "anthropic",
         upstreamModel: "claude-sonnet-4-5",
         inputPrice: 3,
         outputPrice: 15
@@ -625,6 +690,7 @@ describe("llm router server", () => {
 
       await addBinding(app, cookie, model.id, {
         providerId: provider.id,
+        protocol: "anthropic",
         upstreamModel: "claude-sonnet-4-5"
       });
 
@@ -653,7 +719,7 @@ describe("llm router server", () => {
     }
   });
 
-  it("rejects responses endpoint for anthropic providers", async () => {
+  it("does not route anthropic-only bindings through the responses endpoint", async () => {
     const app = await createTestApp();
 
     try {
@@ -671,6 +737,7 @@ describe("llm router server", () => {
 
       await addBinding(app, cookie, model.id, {
         providerId: provider.id,
+        protocol: "anthropic",
         upstreamModel: "claude-sonnet-4-5"
       });
 
@@ -690,8 +757,8 @@ describe("llm router server", () => {
         }
       });
 
-      expect(response.statusCode).toBe(400);
-      expect(response.json().error.code).toBe("endpoint_not_supported_for_provider_protocol");
+      expect(response.statusCode).toBe(404);
+      expect(response.json().error.code).toBe("model_not_routable");
     } finally {
       await app.close();
     }
@@ -1424,7 +1491,7 @@ describe("llm router server", () => {
         upstreamModel: "gpt-b"
       });
 
-      const bindingIds = secondBinding.bindings.map((binding) => binding.id);
+      const bindingIds = secondBinding.bindings.openai.map((binding) => binding.id);
       const reversed = [...bindingIds].reverse();
 
       const applyResponse = await app.inject({
@@ -1432,6 +1499,7 @@ describe("llm router server", () => {
         url: `/admin/api/models/${model.id}/runtime-order/apply`,
         headers: { cookie },
         payload: {
+          protocol: "openai",
           bindingIds: reversed
         }
       });
@@ -1442,23 +1510,26 @@ describe("llm router server", () => {
         url: `/admin/api/models/${model.id}/runtime-order/save-default`,
         headers: { cookie },
         payload: {
+          protocol: "openai",
           bindingIds: reversed
         }
       });
       expect(saveDefaultResponse.statusCode).toBe(200);
 
       const savedModel = saveDefaultResponse.json().item as {
-        bindings: Array<{
-          id: string;
-          runtimePriority: number;
-          defaultPriority: number;
-          providerName: string;
-        }>;
+        bindings: {
+          openai: Array<{
+            id: string;
+            runtimePriority: number;
+            defaultPriority: number;
+            providerName: string;
+          }>;
+        };
       };
 
-      expect(savedModel.bindings.map((binding) => binding.id)).toEqual(reversed);
-      expect(savedModel.bindings.map((binding) => binding.runtimePriority)).toEqual([0, 1]);
-      expect(savedModel.bindings.map((binding) => binding.defaultPriority)).toEqual([0, 1]);
+      expect(savedModel.bindings.openai.map((binding) => binding.id)).toEqual(reversed);
+      expect(savedModel.bindings.openai.map((binding) => binding.runtimePriority)).toEqual([0, 1]);
+      expect(savedModel.bindings.openai.map((binding) => binding.defaultPriority)).toEqual([0, 1]);
     } finally {
       await app.close();
     }
@@ -1474,7 +1545,7 @@ describe("llm router server", () => {
       });
 
       const firstModel = models.json().items[0];
-      expect(firstModel.bindings[0].providerName).toBe("provider-b");
+      expect(firstModel.bindings.openai[0].providerName).toBe("provider-b");
     } finally {
       await restarted.close();
     }
@@ -1507,7 +1578,7 @@ describe("llm router server", () => {
         upstreamModel: "model-b"
       });
 
-      const bindingIds = secondBinding.bindings.map((binding) => binding.id);
+      const bindingIds = secondBinding.bindings.openai.map((binding) => binding.id);
 
       const missingBodyResponse = await app.inject({
         method: "POST",
@@ -1523,6 +1594,7 @@ describe("llm router server", () => {
         url: `/admin/api/models/${model.id}/runtime-order/save-default`,
         headers: { cookie },
         payload: {
+          protocol: "openai",
           bindingIds: [bindingIds[0]]
         }
       });
@@ -1646,10 +1718,11 @@ describe("llm router server", () => {
         .items.find((item: { id: string }) => item.id === modelB.id);
 
       expect(reloadedModelA).toBeTruthy();
-      expect(reloadedModelA.bindings).toHaveLength(0);
+      expect(reloadedModelA.bindings.openai).toHaveLength(0);
+      expect(reloadedModelA.bindings.anthropic).toHaveLength(0);
       expect(reloadedModelB).toBeTruthy();
-      expect(reloadedModelB.bindings).toHaveLength(1);
-      expect(reloadedModelB.bindings[0].providerName).toBe("provider-delete-b");
+      expect(reloadedModelB.bindings.openai).toHaveLength(1);
+      expect(reloadedModelB.bindings.openai[0].providerName).toBe("provider-delete-b");
     } finally {
       await app.close();
     }
@@ -1750,7 +1823,7 @@ describe("llm router server", () => {
         upstreamModel: "model-b"
       });
 
-      const bindingToDelete = secondBinding.bindings.find(
+      const bindingToDelete = secondBinding.bindings.openai.find(
         (binding) => binding.providerName === "binding-provider-b"
       );
       expect(bindingToDelete).toBeTruthy();
@@ -1778,8 +1851,8 @@ describe("llm router server", () => {
         .json()
         .items.find((item: { id: string }) => item.id === model.id);
       expect(reloadedModel).toBeTruthy();
-      expect(reloadedModel.bindings).toHaveLength(1);
-      expect(reloadedModel.bindings[0].providerName).toBe("binding-provider-a");
+      expect(reloadedModel.bindings.openai).toHaveLength(1);
+      expect(reloadedModel.bindings.openai[0].providerName).toBe("binding-provider-a");
     } finally {
       await app.close();
     }

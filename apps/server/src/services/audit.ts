@@ -18,6 +18,7 @@ export interface AuditLogInput {
   endpointType: z.infer<typeof endpointTypeSchema>;
   providerId?: string | null;
   providerName?: string | null;
+  providerProtocol?: "openai" | "anthropic" | null;
   modelAlias?: string | null;
   upstreamModel?: string | null;
   apiKeyId?: string | null;
@@ -49,6 +50,7 @@ export function writeAuditLog(sqlite: DatabaseSync, input: AuditLogInput): void 
           endpoint_type,
           provider_id,
           provider_name,
+          provider_protocol,
           model_alias,
           upstream_model,
           api_key_id,
@@ -68,7 +70,7 @@ export function writeAuditLog(sqlite: DatabaseSync, input: AuditLogInput): void 
           client_ip,
           user_agent
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `
     )
     .run(
@@ -78,6 +80,7 @@ export function writeAuditLog(sqlite: DatabaseSync, input: AuditLogInput): void 
       input.endpointType,
       input.providerId ?? null,
       input.providerName ?? null,
+      input.providerProtocol ?? null,
       input.modelAlias ?? null,
       input.upstreamModel ?? null,
       input.apiKeyId ?? null,

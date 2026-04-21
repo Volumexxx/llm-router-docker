@@ -35,6 +35,7 @@ interface AuditMetricRow {
   total_tokens: number | null;
   estimated_cost: number | null;
   provider_name: string | null;
+  provider_protocol: string | null;
   model_alias: string | null;
   api_key_id: string | null;
   api_key_name: string | null;
@@ -381,6 +382,7 @@ function toAuditMetricRow(row: Record<string, unknown>): AuditMetricRow {
     total_tokens: readNumber(row.total_tokens),
     estimated_cost: readNumber(row.estimated_cost),
     provider_name: row.provider_name != null ? String(row.provider_name) : null,
+    provider_protocol: row.provider_protocol != null ? String(row.provider_protocol) : null,
     model_alias: row.model_alias != null ? String(row.model_alias) : null,
     api_key_id: row.api_key_id != null ? String(row.api_key_id) : null,
     api_key_name: row.api_key_name != null ? String(row.api_key_name) : null,
@@ -467,16 +469,25 @@ export function buildDashboardSummary(
     const tokens = getDisplayTokens(row);
     const cost = row.estimated_cost ?? 0;
     const providerLabel = row.provider_name?.trim() || null;
+    const providerProtocol = row.provider_protocol === "anthropic" ? "anthropic" : row.provider_protocol === "openai" ? "openai" : null;
+    const providerKey =
+      providerLabel && providerProtocol
+        ? `${providerLabel}:${providerProtocol}`
+        : providerLabel;
+    const providerDisplayLabel =
+      providerLabel && providerProtocol
+        ? `${providerLabel} (${providerProtocol === "anthropic" ? "Anthropic" : "OpenAI"})`
+        : providerLabel;
     const modelLabel = row.model_alias ?? "Unknown Model";
     const apiKeyLabel = formatApiKeyLabel(row.api_key_name, row.api_key_masked_preview);
     const apiKeyGroupKey = row.api_key_id ?? `${row.api_key_name ?? ""}:${row.api_key_masked_preview ?? ""}`;
 
     accumulateBucket(overallBuckets[index], isSuccess, latency, tokens, cost);
 
-    if (providerLabel) {
-      const providerBucketList = providerBuckets.get(providerLabel) ?? makeBuckets(window.labels);
+    if (providerKey && providerDisplayLabel) {
+      const providerBucketList = providerBuckets.get(providerKey) ?? makeBuckets(window.labels);
       accumulateBucket(providerBucketList[index], isSuccess, latency, tokens, cost);
-      providerBuckets.set(providerLabel, providerBucketList);
+      providerBuckets.set(providerKey, providerBucketList);
     }
 
     const modelBucketList = modelBuckets.get(modelLabel) ?? makeBuckets(window.labels);
@@ -529,7 +540,14 @@ export function buildDashboardSummary(
     },
     trend: finalizeBuckets(overallBuckets),
     providerCards: Array.from(providerBuckets.entries())
-      .map(([label, buckets]) => createCard(label, label, buckets))
+      .map(([key, buckets]) => {
+        const [providerName, protocol] = key.split(":");
+        const label =
+          providerName && protocol
+            ? `${providerName} (${protocol === "anthropic" ? "Anthropic" : "OpenAI"})`
+            : key;
+        return createCard(key, label, buckets);
+      })
       .sort((left, right) => right.requests - left.requests),
     modelCards: Array.from(modelBuckets.entries())
       .map(([label, buckets]) => createCard(label, label, buckets))
