@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import dotenv from "dotenv";
 import { z } from "zod";
 
-import { normalizeUrl } from "../../../packages/shared/src/index.ts";
+import { MAX_TIMEOUT_MS, normalizeUrl } from "../../../packages/shared/src/index.ts";
 
 function loadDotenvFiles(): void {
   const configFilePath = fileURLToPath(import.meta.url);
@@ -60,9 +60,9 @@ const rawConfigSchema = z.object({
   PUBLIC_DIR: z.string().optional(),
   TIMEZONE: z.string().default("UTC"),
   MAX_REQUEST_BODY_SIZE_MB: z.coerce.number().min(1).max(200).default(50),
-  REQUEST_TIMEOUT_MS: z.coerce.number().int().min(1000).max(600000).default(120000),
-  UPSTREAM_TIMEOUT_MS: z.coerce.number().int().min(1000).max(600000).default(120000),
-  PROVIDER_TEST_DEFAULT_TIMEOUT_MS: z.coerce.number().int().min(1000).max(600000).default(10000),
+  REQUEST_TIMEOUT_MS: z.coerce.number().int().min(1000).max(MAX_TIMEOUT_MS).default(120000),
+  UPSTREAM_TIMEOUT_MS: z.coerce.number().int().min(1000).max(MAX_TIMEOUT_MS).default(120000),
+  PROVIDER_TEST_DEFAULT_TIMEOUT_MS: z.coerce.number().int().min(1000).max(MAX_TIMEOUT_MS).default(10000),
   SESSION_TTL_HOURS: z.coerce.number().int().min(1).max(24 * 90).default(24 * 14),
   TRUST_PROXY: booleanish.default(false),
   EXTERNAL_BASE_URL: z.string().url().optional(),

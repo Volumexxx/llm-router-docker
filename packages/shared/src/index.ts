@@ -15,6 +15,7 @@ export const endpointTypeSchema = z.enum([
 
 export const providerProtocolSchema = z.enum(["openai", "anthropic"]);
 export const ANTHROPIC_API_VERSION = "2023-06-01";
+export const MAX_TIMEOUT_MS = 3_600_000;
 export type ProviderProtocol = z.infer<typeof providerProtocolSchema>;
 
 export const auditStatusSchema = z.enum([
@@ -62,7 +63,7 @@ export const loginSchema = z.object({
 const providerProtocolConfigBaseSchema = z.object({
   baseUrl: z.string().url(),
   apiKey: z.string().min(1).max(512),
-  testTimeoutMs: z.number().int().min(1000).max(600000).default(10000)
+  testTimeoutMs: z.number().int().min(1000).max(MAX_TIMEOUT_MS).default(10000)
 });
 
 export const openAiProviderConfigCreateSchema = providerProtocolConfigBaseSchema;
@@ -73,7 +74,7 @@ export const anthropicProviderConfigCreateSchema = providerProtocolConfigBaseSch
 const providerProtocolConfigUpdateBaseSchema = z.object({
   baseUrl: z.string().url().optional(),
   apiKey: z.string().min(1).max(512).optional(),
-  testTimeoutMs: z.number().int().min(1000).max(600000).optional()
+  testTimeoutMs: z.number().int().min(1000).max(MAX_TIMEOUT_MS).optional()
 });
 
 export const openAiProviderConfigUpdateSchema = providerProtocolConfigUpdateBaseSchema;
