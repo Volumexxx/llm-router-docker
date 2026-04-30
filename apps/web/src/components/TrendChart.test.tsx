@@ -1,7 +1,7 @@
-﻿import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
-import { TrendChart } from "./TrendChart.tsx";
 import { click, render } from "../test/render.tsx";
+import { TrendChart } from "./TrendChart.tsx";
 
 describe("TrendChart", () => {
   const activeRenders: Array<{ unmount: () => Promise<void> }> = [];
@@ -15,7 +15,7 @@ describe("TrendChart", () => {
     }
   });
 
-  it("shows the last point details by default and switches details when a point is clicked", async () => {
+  it("shows the last bucket details by default and switches details when a bar is clicked", async () => {
     const view = await render(
       <TrendChart
         series={[
@@ -37,14 +37,14 @@ describe("TrendChart", () => {
     expect(view.container.textContent).toContain("11:00");
     expect(view.container.textContent).toContain("24 req");
 
-    const pointButtons = view.container.querySelectorAll(".trend-chart-point-button");
-    expect(pointButtons).toHaveLength(3);
+    const barButtons = view.container.querySelectorAll(".trend-chart-bar-button");
+    expect(barButtons).toHaveLength(3);
 
-    await click(pointButtons[0]!);
+    await click(barButtons[0]!);
 
     expect(view.container.textContent).toContain("09:00");
     expect(view.container.textContent).toContain("12 req");
-    expect(view.container.querySelectorAll(".trend-chart-point.is-selected")).toHaveLength(1);
+    expect(view.container.querySelectorAll(".trend-chart-bar.is-selected")).toHaveLength(1);
   });
 
   it("supports selecting a specific bucket by default", async () => {
@@ -71,7 +71,7 @@ describe("TrendChart", () => {
     expect(view.container.textContent).toContain("8 req");
   });
 
-  it("shows all series values for the selected bucket in comparison mode", async () => {
+  it("shows all series values for the selected bucket in grouped comparison mode", async () => {
     const view = await render(
       <TrendChart
         series={[
@@ -102,14 +102,14 @@ describe("TrendChart", () => {
     expect(view.container.textContent).toContain("Wed");
     expect(view.container.textContent).toContain("54 tok");
     expect(view.container.textContent).toContain("39 tok");
-    expect(view.container.querySelectorAll(".trend-chart-point.is-selected")).toHaveLength(2);
+    expect(view.container.querySelectorAll(".trend-chart-bar.is-selected")).toHaveLength(2);
 
-    const pointButtons = view.container.querySelectorAll(".trend-chart-point-button");
-    await click(pointButtons[0]!);
+    const barButtons = view.container.querySelectorAll(".trend-chart-bar-button");
+    await click(barButtons[0]!);
 
     expect(view.container.textContent).toContain("Mon");
     expect(view.container.textContent).toContain("30 tok");
     expect(view.container.textContent).toContain("21 tok");
-    expect(view.container.querySelectorAll(".trend-chart-point.is-selected")).toHaveLength(2);
+    expect(view.container.querySelectorAll(".trend-chart-bar.is-selected")).toHaveLength(2);
   });
 });

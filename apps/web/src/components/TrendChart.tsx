@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 interface TrendChartSeries {
   label: string;
@@ -23,19 +23,6 @@ const PADDING = {
   bottom: 52,
   left: 72
 };
-
-function createLinePath(values: number[], max: number, pointCount: number): string {
-  const innerWidth = CHART_WIDTH - PADDING.left - PADDING.right;
-  const innerHeight = CHART_HEIGHT - PADDING.top - PADDING.bottom;
-
-  return values
-    .map((value, index) => {
-      const x = PADDING.left + (innerWidth * index) / Math.max(pointCount - 1, 1);
-      const y = PADDING.top + innerHeight - (value / Math.max(max, 1)) * innerHeight;
-      return `${index === 0 ? "M" : "L"} ${x.toFixed(2)} ${y.toFixed(2)}`;
-    })
-    .join(" ");
-}
 
 function pickTickIndices(length: number, maxTicks: number): number[] {
   if (length <= maxTicks) {
@@ -103,8 +90,18 @@ export function TrendChart({ series, valueFormatter, defaultSelectedIndex }: Tre
       };
     })
     .filter((item): item is { label: string; color: string; value: number } => item !== null);
-  const selectedLabel = labels[resolvedSelectedIndex] ?? detailItems[0]?.label ?? "";
+  const selectedLabel = labels[resolvedSelectedIndex] ?? "";
   const isComparisonChart = detailItems.length > 1;
+  const bucketWidth = innerWidth / Math.max(labels.length, 1);
+  const groupPadding = Math.min(18, bucketWidth * 0.18);
+  const usableGroupWidth = Math.max(bucketWidth - groupPadding * 2, 12);
+  const seriesGap =
+    normalizedSeries.length > 1 ? Math.min(8, usableGroupWidth * 0.12) : 0;
+  const barWidth = Math.max(
+    (usableGroupWidth - seriesGap * Math.max(normalizedSeries.length - 1, 0)) /
+      Math.max(normalizedSeries.length, 1),
+    6
+  );
 
   return (
     <div className="chart-shell">
@@ -141,8 +138,19 @@ export function TrendChart({ series, valueFormatter, defaultSelectedIndex }: Tre
           );
         })}
 
+        {labels.length > 0 ? (
+          <rect
+            x={PADDING.left + bucketWidth * resolvedSelectedIndex}
+            y={PADDING.top}
+            width={bucketWidth}
+            height={innerHeight}
+            rx="18"
+            className="trend-chart-selection-band"
+          />
+        ) : null}
+
         {labelIndices.map((labelIndex) => {
-          const x = PADDING.left + (innerWidth * labelIndex) / Math.max(labels.length - 1, 1);
+          const x = PADDING.left + bucketWidth * labelIndex + bucketWidth / 2;
           return (
             <text
               key={`${labels[labelIndex]}-${labelIndex}`}
@@ -156,52 +164,53 @@ export function TrendChart({ series, valueFormatter, defaultSelectedIndex }: Tre
           );
         })}
 
-        {normalizedSeries.map((item) => {
-          const path = createLinePath(
-            item.points.map((point) => point.value),
-            maxValue,
-            item.points.length
-          );
+        {normalizedSeries.map((item, seriesIndex) =>
+          item.points.map((point, index) => {
+            const valueRatio = point.value / Math.max(maxValue, 1);
+            const height = point.value > 0 ? Math.max(valueRatio * innerHeight, 4) : 2;
+            const x =
+              PADDING.left +
+              bucketWidth * index +
+              groupPadding +
+              seriesIndex * (barWidth + seriesGap);
+            const y = PADDING.top + innerHeight - height;
+            const isSelected = index === resolvedSelectedIndex;
 
-          return (
-            <g key={item.label}>
-              <path d={path} fill="none" stroke={item.color} strokeWidth="3" strokeLinecap="round" />
-              {item.points.map((point, index) => {
-                const x = PADDING.left + (innerWidth * index) / Math.max(item.points.length - 1, 1);
-                const y =
-                  PADDING.top + innerHeight - (point.value / Math.max(maxValue, 1)) * innerHeight;
-                const isSelected = index === resolvedSelectedIndex;
-
-                return (
-                  <g
-                    key={`${item.label}-${point.label}`}
-                    className="trend-chart-point-button"
-                    role="button"
-                    tabIndex={0}
-                    aria-label={`查看 ${item.label} 在 ${point.label} 的详情`}
-                    onClick={() => setSelectedIndex(index)}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter" || event.key === " ") {
-                        event.preventDefault();
-                        setSelectedIndex(index);
-                      }
-                    }}
-                  >
-                    <circle cx={x} cy={y} r="12" className="trend-chart-point-hitbox" />
-                    {isSelected ? <circle cx={x} cy={y} r="8.5" className="trend-chart-point-ring" /> : null}
-                    <circle
-                      cx={x}
-                      cy={y}
-                      r={isSelected ? "5.5" : "3.5"}
-                      fill={item.color}
-                      className={isSelected ? "trend-chart-point is-selected" : "trend-chart-point"}
-                    />
-                  </g>
-                );
-              })}
-            </g>
-          );
-        })}
+            return (
+              <g
+                key={`${item.label}-${point.label}`}
+                className="trend-chart-bar-button"
+                role="button"
+                tabIndex={0}
+                aria-label={`查看 ${item.label} 在 ${point.label} 的详情`}
+                onClick={() => setSelectedIndex(index)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    setSelectedIndex(index);
+                  }
+                }}
+              >
+                <rect
+                  x={PADDING.left + bucketWidth * index}
+                  y={PADDING.top}
+                  width={bucketWidth}
+                  height={innerHeight}
+                  className="trend-chart-bar-hitbox"
+                />
+                <rect
+                  x={x}
+                  y={y}
+                  width={barWidth}
+                  height={height}
+                  rx="10"
+                  fill={item.color}
+                  className={isSelected ? "trend-chart-bar is-selected" : "trend-chart-bar"}
+                />
+              </g>
+            );
+          })
+        )}
       </svg>
 
       <div className="chart-detail-panel" aria-live="polite">

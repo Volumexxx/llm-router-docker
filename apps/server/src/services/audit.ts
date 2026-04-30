@@ -212,18 +212,43 @@ export function queryAuditLogs(sqlite: DatabaseSync, input: AuditQueryInput) {
 export function queryInferenceAuditRows(
   sqlite: DatabaseSync,
   start: string,
-  end: string
+  end: string,
+  filters?: {
+    providerId?: string;
+    modelAlias?: string;
+    apiKeyId?: string;
+  }
 ): Array<Record<string, unknown>> {
+  const clauses = [
+    "endpoint_type IN ('chat_completions', 'responses', 'messages')",
+    "occurred_at >= ?",
+    "occurred_at <= ?"
+  ];
+  const params: Array<string> = [start, end];
+
+  if (filters?.providerId) {
+    clauses.push("provider_id = ?");
+    params.push(filters.providerId);
+  }
+
+  if (filters?.modelAlias) {
+    clauses.push("model_alias = ?");
+    params.push(filters.modelAlias);
+  }
+
+  if (filters?.apiKeyId) {
+    clauses.push("api_key_id = ?");
+    params.push(filters.apiKeyId);
+  }
+
   return sqlite
     .prepare(
       `
         SELECT *
         FROM audit_logs
-        WHERE endpoint_type IN ('chat_completions', 'responses', 'messages')
-          AND occurred_at >= ?
-          AND occurred_at <= ?
+        WHERE ${clauses.join("\n          AND ")}
         ORDER BY occurred_at ASC
       `
     )
-    .all(start, end) as Array<Record<string, unknown>>;
+    .all(...params) as Array<Record<string, unknown>>;
 }

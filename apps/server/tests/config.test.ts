@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   MAX_TIMEOUT_MS,
+  dashboardQuerySchema,
   providerCreateSchema,
   providerUpdateSchema
 } from "../../../packages/shared/src/index.ts";
@@ -87,5 +88,23 @@ describe("timeout configuration limits", () => {
         }
       })
     ).toThrow();
+  });
+
+  it("accepts dashboard filter query combinations", () => {
+    const parsed = dashboardQuerySchema.parse({
+      range: "day",
+      date: "2026-04-15",
+      providerId: "11111111-1111-4111-8111-111111111111",
+      modelAlias: "gpt-4o-mini",
+      apiKeyId: "22222222-2222-4222-8222-222222222222"
+    });
+
+    expect(parsed).toEqual({
+      range: "day",
+      date: "2026-04-15",
+      providerId: "11111111-1111-4111-8111-111111111111",
+      modelAlias: "gpt-4o-mini",
+      apiKeyId: "22222222-2222-4222-8222-222222222222"
+    });
   });
 });

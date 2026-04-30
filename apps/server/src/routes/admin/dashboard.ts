@@ -18,7 +18,12 @@ export async function registerAdminDashboardRoutes(app: FastifyInstance): Promis
             query.range,
             request.server.appCtx.config.timezone,
             new Date(),
-            query.range === "day" ? query.date : undefined
+            query.range === "day" ? query.date : undefined,
+            {
+              providerId: query.providerId,
+              modelAlias: query.modelAlias,
+              apiKeyId: query.apiKeyId
+            }
           )
         );
       } catch (error) {

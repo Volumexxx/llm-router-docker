@@ -1,11 +1,19 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { Modal } from "../components/Modal.tsx";
 import { TrendChart } from "../components/TrendChart.tsx";
-import type { DashboardCard, DashboardSummary, TrendPoint } from "../lib/api.ts";
+import type {
+  ApiKeyItem,
+  DashboardCard,
+  DashboardFilters,
+  DashboardSummary,
+  ModelItem,
+  ProviderItem,
+  TrendPoint
+} from "../lib/api.ts";
 import {
-  formatDate,
   formatCost,
+  formatDate,
   formatDateTime,
   formatDuration,
   formatNumber,
@@ -14,6 +22,12 @@ import {
 
 interface DashboardPageProps {
   dashboard: DashboardSummary | null;
+  providers: ProviderItem[];
+  models: ModelItem[];
+  apiKeys: ApiKeyItem[];
+  dashboardFilters: DashboardFilters;
+  applyDashboardFilters: (filters: DashboardFilters) => void;
+  clearDashboardFilters: () => void;
   range: "day" | "week" | "month";
   setRange: (range: "day" | "week" | "month") => void;
   setDayDate: (date: string) => void;
@@ -52,6 +66,12 @@ type ChartState = {
 type SortState = {
   key: SortKey;
   direction: SortDirection;
+};
+
+const EMPTY_FILTERS: DashboardFilters = {
+  providerId: "",
+  modelAlias: "",
+  apiKeyId: ""
 };
 
 const chartPalette = [
@@ -178,7 +198,31 @@ function nextSortState(current: SortState, key: SortKey): SortState {
   };
 }
 
-export function DashboardPage({ dashboard, range, setRange, setDayDate }: DashboardPageProps) {
+function formatModelFilterLabel(model: ModelItem): string {
+  return model.displayName === model.alias ? model.alias : `${model.displayName} (${model.alias})`;
+}
+
+function formatApiKeyFilterLabel(apiKey: ApiKeyItem): string {
+  const base = `${apiKey.name} (${apiKey.maskedPreview})`;
+  return apiKey.deletedAt ? `${base} [已删除]` : base;
+}
+
+function hasFilterValues(filters: DashboardFilters): boolean {
+  return Boolean(filters.providerId || filters.modelAlias || filters.apiKeyId);
+}
+
+export function DashboardPage({
+  dashboard,
+  providers,
+  models,
+  apiKeys,
+  dashboardFilters,
+  applyDashboardFilters,
+  clearDashboardFilters,
+  range,
+  setRange,
+  setDayDate
+}: DashboardPageProps) {
   const [activeTab, setActiveTab] = useState<DashboardTabId>("provider");
   const [sortStateByTab, setSortStateByTab] = useState<Record<DashboardTabId, SortState>>({
     provider: { key: "requests", direction: "desc" },
@@ -186,7 +230,12 @@ export function DashboardPage({ dashboard, range, setRange, setDayDate }: Dashbo
     apiKey: { key: "requests", direction: "desc" }
   });
   const [chartState, setChartState] = useState<ChartState | null>(null);
+  const [filterDraft, setFilterDraft] = useState<DashboardFilters>(dashboardFilters);
   const dayPickerRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    setFilterDraft(dashboardFilters);
+  }, [dashboardFilters]);
 
   const currentTab = dashboardTabs.find((item) => item.id === activeTab) ?? dashboardTabs[0];
   const currentSort = sortStateByTab[activeTab];
@@ -194,6 +243,26 @@ export function DashboardPage({ dashboard, range, setRange, setDayDate }: Dashbo
     () => formatDate(new Date(), dashboard?.timezone),
     [dashboard?.timezone]
   );
+  const providerOptions = useMemo(
+    () => [...providers].sort((left, right) => left.name.localeCompare(right.name, "zh-CN")),
+    [providers]
+  );
+  const modelOptions = useMemo(
+    () => [...models].sort((left, right) => left.alias.localeCompare(right.alias, "zh-CN")),
+    [models]
+  );
+  const apiKeyOptions = useMemo(
+    () => [...apiKeys].sort((left, right) => left.name.localeCompare(right.name, "zh-CN")),
+    [apiKeys]
+  );
+  const hasPendingFilterChanges = useMemo(
+    () =>
+      filterDraft.providerId !== dashboardFilters.providerId ||
+      filterDraft.modelAlias !== dashboardFilters.modelAlias ||
+      filterDraft.apiKeyId !== dashboardFilters.apiKeyId,
+    [dashboardFilters, filterDraft]
+  );
+  const hasActiveFilters = hasFilterValues(dashboardFilters);
 
   const sortedRows = useMemo(() => {
     if (!dashboard) {
@@ -248,7 +317,7 @@ export function DashboardPage({ dashboard, range, setRange, setDayDate }: Dashbo
     const config = metricConfig[metricKey];
     setChartState({
       title: `${card.label} · ${config.label} 趋势`,
-      description: `当前范围：${range === "day" ? "Day" : range === "week" ? "Week" : "Month"}。点击表格中的任意数值可查看单对象趋势。`,
+      description: `当前范围：${range === "day" ? "Day" : range === "week" ? "Week" : "Month"}。点击柱体可查看当前时间桶的详细数值。`,
       metricKey,
       series: [
         {
@@ -267,7 +336,7 @@ export function DashboardPage({ dashboard, range, setRange, setDayDate }: Dashbo
     const config = metricConfig[metricKey];
     setChartState({
       title: `${currentTab.label} · ${config.label} 趋势对比`,
-      description: "展示当前排序结果前 8 项的时间趋势对比。",
+      description: "展示当前排序结果前 8 项在每个时间桶内的分组柱状对比。",
       metricKey,
       series: sortedRows.slice(0, 8).map((card, index) => ({
         label: card.label,
@@ -300,27 +369,26 @@ export function DashboardPage({ dashboard, range, setRange, setDayDate }: Dashbo
         <div className="stack dashboard-hero-head">
           <div className="toolbar cluster-between">
             <div className="stack compact-stack">
-            <p className="eyebrow">Metrics Command Center</p>
-            <h3>运行指标总览</h3>
-            <p className="muted">
-              {formatDateTime(dashboard.windowStart, dashboard.timezone)} -{" "}
-              {formatDateTime(dashboard.windowEnd, dashboard.timezone)}
-            </p>
-          </div>
+              <p className="eyebrow">Metrics Command Center</p>
+              <h3>运行指标总览</h3>
+              <p className="muted">
+                {formatDateTime(dashboard.windowStart, dashboard.timezone)} -{" "}
+                {formatDateTime(dashboard.windowEnd, dashboard.timezone)}
+              </p>
+            </div>
 
-          <div className="toolbar dashboard-range-controls">
-            {(["day", "week", "month"] as const).map((value) => (
-              <button
-                key={value}
-                type="button"
-                className={range === value ? "chip active" : "chip"}
-                onClick={() => setRange(value)}
-              >
-                {value === "day" ? "Day" : value === "week" ? "Week" : "Month"}
-              </button>
-            ))}
-          </div>
-
+            <div className="toolbar dashboard-range-controls">
+              {(["day", "week", "month"] as const).map((value) => (
+                <button
+                  key={value}
+                  type="button"
+                  className={range === value ? "chip active" : "chip"}
+                  onClick={() => setRange(value)}
+                >
+                  {value === "day" ? "Day" : value === "week" ? "Week" : "Month"}
+                </button>
+              ))}
+            </div>
           </div>
 
           {range === "day" ? (
@@ -351,6 +419,98 @@ export function DashboardPage({ dashboard, range, setRange, setDayDate }: Dashbo
               </div>
             </div>
           ) : null}
+
+          <div className="dashboard-filter-panel">
+            <div className="stack compact-stack">
+              <h4>全局筛选</h4>
+              <p className="muted">
+                Provider、Model、Key 过滤会同时影响顶部汇总、维度分析和趋势图弹窗。
+              </p>
+            </div>
+
+            <div className="form-grid dashboard-filter-grid">
+              <label>
+                <span>Provider</span>
+                <select
+                  aria-label="Dashboard provider filter"
+                  value={filterDraft.providerId}
+                  onChange={(event) =>
+                    setFilterDraft((current) => ({ ...current, providerId: event.target.value }))
+                  }
+                >
+                  <option value="">全部</option>
+                  {providerOptions.map((provider) => (
+                    <option key={provider.id} value={provider.id}>
+                      {provider.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label>
+                <span>Model</span>
+                <select
+                  aria-label="Dashboard model filter"
+                  value={filterDraft.modelAlias}
+                  onChange={(event) =>
+                    setFilterDraft((current) => ({ ...current, modelAlias: event.target.value }))
+                  }
+                >
+                  <option value="">全部</option>
+                  {modelOptions.map((model) => (
+                    <option key={model.id} value={model.alias}>
+                      {formatModelFilterLabel(model)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label>
+                <span>Key</span>
+                <select
+                  aria-label="Dashboard api key filter"
+                  value={filterDraft.apiKeyId}
+                  onChange={(event) =>
+                    setFilterDraft((current) => ({ ...current, apiKeyId: event.target.value }))
+                  }
+                >
+                  <option value="">全部</option>
+                  {apiKeyOptions.map((apiKey) => (
+                    <option key={apiKey.id} value={apiKey.id}>
+                      {formatApiKeyFilterLabel(apiKey)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+
+            <div className="toolbar dashboard-filter-actions">
+              <button
+                type="button"
+                className="primary dashboard-apply-button"
+                disabled={!hasPendingFilterChanges}
+                onClick={() => applyDashboardFilters(filterDraft)}
+              >
+                Apply Filters
+              </button>
+              <button
+                type="button"
+                className="secondary"
+                disabled={!hasPendingFilterChanges && !hasActiveFilters}
+                onClick={() => {
+                  setFilterDraft(EMPTY_FILTERS);
+                  clearDashboardFilters();
+                }}
+              >
+                Clear Filters
+              </button>
+              {hasActiveFilters ? (
+                <span className="pill dashboard-filter-status">当前为筛选口径</span>
+              ) : (
+                <span className="pill dashboard-filter-status">当前为全量口径</span>
+              )}
+            </div>
+          </div>
         </div>
 
         <div className="metric-grid">
@@ -411,7 +571,7 @@ export function DashboardPage({ dashboard, range, setRange, setDayDate }: Dashbo
           <div className="stack compact-stack">
             <h3>维度分析</h3>
             <p className="muted">
-              默认按请求数排序。点击数值单元格查看单对象趋势，点击列表头的“趋势”查看分签对比曲线。
+              默认按请求数排序。点击数值单元格查看单对象趋势，点击列表头的“趋势”查看前 8 项的柱状对比。
             </p>
           </div>
 
@@ -473,7 +633,7 @@ export function DashboardPage({ dashboard, range, setRange, setDayDate }: Dashbo
               {sortedRows.length === 0 ? (
                 <tr>
                   <td colSpan={metricColumns.length + 1}>
-                    <div className="table-empty">当前范围内暂无统计数据。</div>
+                    <div className="table-empty">当前范围和筛选条件下暂无统计数据。</div>
                   </td>
                 </tr>
               ) : (

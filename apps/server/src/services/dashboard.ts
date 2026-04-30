@@ -34,6 +34,7 @@ interface AuditMetricRow {
   output_tokens: number | null;
   total_tokens: number | null;
   estimated_cost: number | null;
+  provider_id: string | null;
   provider_name: string | null;
   provider_protocol: string | null;
   model_alias: string | null;
@@ -58,6 +59,12 @@ interface DashboardWindow {
   currentBucketIndex: number;
   startParts: ZonedDateTimeParts;
   anchorDate: string;
+}
+
+interface DashboardFilterInput {
+  providerId?: string;
+  modelAlias?: string;
+  apiKeyId?: string;
 }
 
 const HOUR_MS = 60 * 60 * 1000;
@@ -381,6 +388,7 @@ function toAuditMetricRow(row: Record<string, unknown>): AuditMetricRow {
     output_tokens: readNumber(row.output_tokens),
     total_tokens: readNumber(row.total_tokens),
     estimated_cost: readNumber(row.estimated_cost),
+    provider_id: row.provider_id != null ? String(row.provider_id) : null,
     provider_name: row.provider_name != null ? String(row.provider_name) : null,
     provider_protocol: row.provider_protocol != null ? String(row.provider_protocol) : null,
     model_alias: row.model_alias != null ? String(row.model_alias) : null,
@@ -429,13 +437,17 @@ export function buildDashboardSummary(
   range: DashboardRange,
   timezoneInput = "UTC",
   now = new Date(),
-  anchorDate?: string
+  anchorDate?: string,
+  filters?: DashboardFilterInput
 ): DashboardSummary {
   const timezone = normalizeTimezone(timezoneInput);
   const window = buildDashboardWindow(range, timezone, now, anchorDate);
-  const rows = queryInferenceAuditRows(sqlite, window.start.toISOString(), window.end.toISOString()).map((row) =>
-    toAuditMetricRow(row)
-  );
+  const rows = queryInferenceAuditRows(
+    sqlite,
+    window.start.toISOString(),
+    window.end.toISOString(),
+    filters
+  ).map((row) => toAuditMetricRow(row));
 
   const overallBuckets = makeBuckets(window.labels);
   const providerBuckets = new Map<string, BucketAccumulator[]>();

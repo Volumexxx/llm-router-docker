@@ -94,6 +94,87 @@ describe("DashboardPage", () => {
     };
   }
 
+  function buildProviders() {
+    return [
+      {
+        id: "provider-a",
+        name: "Provider A",
+        enabled: true,
+        createdAt: "2026-04-10T00:00:00.000Z",
+        updatedAt: "2026-04-10T00:00:00.000Z",
+        openaiConfig: null,
+        anthropicConfig: null
+      },
+      {
+        id: "provider-b",
+        name: "Provider B",
+        enabled: true,
+        createdAt: "2026-04-10T00:00:00.000Z",
+        updatedAt: "2026-04-10T00:00:00.000Z",
+        openaiConfig: null,
+        anthropicConfig: null
+      }
+    ];
+  }
+
+  function buildModels() {
+    return [
+      {
+        id: "model-a",
+        alias: "gpt-4o-mini",
+        displayName: "GPT 4o Mini",
+        enabled: true,
+        bindings: {
+          openai: [],
+          anthropic: []
+        }
+      },
+      {
+        id: "model-b",
+        alias: "claude-sonnet",
+        displayName: "claude-sonnet",
+        enabled: true,
+        bindings: {
+          openai: [],
+          anthropic: []
+        }
+      }
+    ];
+  }
+
+  function buildApiKeys() {
+    return [
+      {
+        id: "key-a",
+        name: "mobile-client",
+        maskedPreview: "lrk***123",
+        enabled: true,
+        deletedAt: null,
+        lastUsedAt: null,
+        createdAt: "2026-04-10T00:00:00.000Z",
+        updatedAt: "2026-04-10T00:00:00.000Z",
+        allowedProviderIds: [],
+        allowedModelAliasIds: [],
+        allProvidersAllowed: true,
+        allModelsAllowed: true
+      },
+      {
+        id: "key-b",
+        name: "batch-client",
+        maskedPreview: "lrk***456",
+        enabled: false,
+        deletedAt: "2026-04-20T00:00:00.000Z",
+        lastUsedAt: null,
+        createdAt: "2026-04-10T00:00:00.000Z",
+        updatedAt: "2026-04-20T00:00:00.000Z",
+        allowedProviderIds: [],
+        allowedModelAliasIds: [],
+        allProvidersAllowed: true,
+        allModelsAllowed: true
+      }
+    ];
+  }
+
   afterEach(async () => {
     vi.useRealTimers();
     trendChartSpy.mockReset();
@@ -114,6 +195,12 @@ describe("DashboardPage", () => {
     const view = await render(
       <DashboardPage
         dashboard={dashboard}
+        providers={buildProviders()}
+        models={buildModels()}
+        apiKeys={buildApiKeys()}
+        dashboardFilters={{ providerId: "", modelAlias: "", apiKeyId: "" }}
+        applyDashboardFilters={() => undefined}
+        clearDashboardFilters={() => undefined}
         range="day"
         setRange={() => undefined}
         setDayDate={() => undefined}
@@ -153,6 +240,12 @@ describe("DashboardPage", () => {
     const view = await render(
       <DashboardPage
         dashboard={historicalDashboard}
+        providers={buildProviders()}
+        models={buildModels()}
+        apiKeys={buildApiKeys()}
+        dashboardFilters={{ providerId: "", modelAlias: "", apiKeyId: "" }}
+        applyDashboardFilters={() => undefined}
+        clearDashboardFilters={() => undefined}
         range="day"
         setRange={() => undefined}
         setDayDate={setDayDate}
@@ -197,6 +290,12 @@ describe("DashboardPage", () => {
     await view.rerender(
       <DashboardPage
         dashboard={buildDashboard()}
+        providers={buildProviders()}
+        models={buildModels()}
+        apiKeys={buildApiKeys()}
+        dashboardFilters={{ providerId: "", modelAlias: "", apiKeyId: "" }}
+        applyDashboardFilters={() => undefined}
+        clearDashboardFilters={() => undefined}
         range="day"
         setRange={() => undefined}
         setDayDate={setDayDate}
@@ -215,6 +314,12 @@ describe("DashboardPage", () => {
           range: "week",
           currentBucketIndex: 2
         })}
+        providers={buildProviders()}
+        models={buildModels()}
+        apiKeys={buildApiKeys()}
+        dashboardFilters={{ providerId: "", modelAlias: "", apiKeyId: "" }}
+        applyDashboardFilters={() => undefined}
+        clearDashboardFilters={() => undefined}
         range="week"
         setRange={() => undefined}
         setDayDate={() => undefined}
@@ -226,5 +331,117 @@ describe("DashboardPage", () => {
     expect(getButtonsByText(view.container, "今天")).toHaveLength(0);
     expect(view.container.querySelector('input[type="date"]')).toBeNull();
     expect(view.container.querySelector(".dashboard-day-subrow")).toBeNull();
+  });
+
+  it("renders provider/model/key filters with all options and applies the selected filter values", async () => {
+    const applyDashboardFilters = vi.fn();
+    const view = await render(
+      <DashboardPage
+        dashboard={buildDashboard()}
+        providers={buildProviders()}
+        models={buildModels()}
+        apiKeys={buildApiKeys()}
+        dashboardFilters={{ providerId: "", modelAlias: "", apiKeyId: "" }}
+        applyDashboardFilters={applyDashboardFilters}
+        clearDashboardFilters={() => undefined}
+        range="day"
+        setRange={() => undefined}
+        setDayDate={() => undefined}
+      />
+    );
+    activeRenders.push(view);
+
+    const providerSelect = view.container.querySelector(
+      'select[aria-label="Dashboard provider filter"]'
+    ) as HTMLSelectElement | null;
+    const modelSelect = view.container.querySelector(
+      'select[aria-label="Dashboard model filter"]'
+    ) as HTMLSelectElement | null;
+    const apiKeySelect = view.container.querySelector(
+      'select[aria-label="Dashboard api key filter"]'
+    ) as HTMLSelectElement | null;
+
+    expect(providerSelect?.options[0]?.textContent).toBe("全部");
+    expect(modelSelect?.options[0]?.textContent).toBe("全部");
+    expect(apiKeySelect?.options[0]?.textContent).toBe("全部");
+
+    await act(async () => {
+      providerSelect!.value = "provider-b";
+      providerSelect!.dispatchEvent(new Event("change", { bubbles: true }));
+      modelSelect!.value = "claude-sonnet";
+      modelSelect!.dispatchEvent(new Event("change", { bubbles: true }));
+      apiKeySelect!.value = "key-b";
+      apiKeySelect!.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+
+    await click(getButtonByText(view.container, "Apply Filters"));
+
+    expect(applyDashboardFilters).toHaveBeenCalledWith({
+      providerId: "provider-b",
+      modelAlias: "claude-sonnet",
+      apiKeyId: "key-b"
+    });
+  });
+
+  it("clears filters and keeps applied filter values selected across rerenders", async () => {
+    const clearDashboardFilters = vi.fn();
+    const appliedFilters = {
+      providerId: "provider-a",
+      modelAlias: "gpt-4o-mini",
+      apiKeyId: "key-a"
+    };
+    const view = await render(
+      <DashboardPage
+        dashboard={buildDashboard()}
+        providers={buildProviders()}
+        models={buildModels()}
+        apiKeys={buildApiKeys()}
+        dashboardFilters={appliedFilters}
+        applyDashboardFilters={() => undefined}
+        clearDashboardFilters={clearDashboardFilters}
+        range="day"
+        setRange={() => undefined}
+        setDayDate={() => undefined}
+      />
+    );
+    activeRenders.push(view);
+
+    const providerSelect = view.container.querySelector(
+      'select[aria-label="Dashboard provider filter"]'
+    ) as HTMLSelectElement | null;
+    const modelSelect = view.container.querySelector(
+      'select[aria-label="Dashboard model filter"]'
+    ) as HTMLSelectElement | null;
+    const apiKeySelect = view.container.querySelector(
+      'select[aria-label="Dashboard api key filter"]'
+    ) as HTMLSelectElement | null;
+
+    expect(providerSelect?.value).toBe("provider-a");
+    expect(modelSelect?.value).toBe("gpt-4o-mini");
+    expect(apiKeySelect?.value).toBe("key-a");
+
+    await view.rerender(
+      <DashboardPage
+        dashboard={buildDashboard({
+          anchorDate: "2026-04-14"
+        })}
+        providers={buildProviders()}
+        models={buildModels()}
+        apiKeys={buildApiKeys()}
+        dashboardFilters={appliedFilters}
+        applyDashboardFilters={() => undefined}
+        clearDashboardFilters={clearDashboardFilters}
+        range="day"
+        setRange={() => undefined}
+        setDayDate={() => undefined}
+      />
+    );
+
+    expect(providerSelect?.value).toBe("provider-a");
+    expect(modelSelect?.value).toBe("gpt-4o-mini");
+    expect(apiKeySelect?.value).toBe("key-a");
+
+    await click(getButtonByText(view.container, "Clear Filters"));
+    expect(clearDashboardFilters).toHaveBeenCalledTimes(1);
   });
 });

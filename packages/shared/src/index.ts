@@ -52,7 +52,10 @@ export const dashboardDateSchema = z
 
 export const dashboardQuerySchema = z.object({
   range: dashboardRangeSchema.default("day"),
-  date: dashboardDateSchema.optional()
+  date: dashboardDateSchema.optional(),
+  providerId: z.string().uuid().optional(),
+  modelAlias: z.string().optional(),
+  apiKeyId: z.string().uuid().optional()
 });
 
 export const loginSchema = z.object({

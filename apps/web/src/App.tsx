@@ -5,6 +5,7 @@ import {
   api,
   type ApiKeyItem,
   type AuditResponse,
+  type DashboardFilters,
   type DashboardSummary,
   type ModelItem,
   type ProviderItem,
@@ -35,6 +36,12 @@ type ApiKeyDraft = {
   allowedProviderIds: string[];
   allModelsAllowed: boolean;
   allowedModelAliasIds: string[];
+};
+
+const EMPTY_DASHBOARD_FILTERS: DashboardFilters = {
+  providerId: "",
+  modelAlias: "",
+  apiKeyId: ""
 };
 
 const sectionMeta: Record<
@@ -100,6 +107,7 @@ export default function App() {
 
   const [dashboardRange, setDashboardRange] = useState<"day" | "week" | "month">("day");
   const [dashboardDayDate, setDashboardDayDate] = useState<string | null>(null);
+  const [dashboardFilters, setDashboardFilters] = useState<DashboardFilters>(EMPTY_DASHBOARD_FILTERS);
   const [dashboard, setDashboard] = useState<DashboardSummary | null>(null);
 
   const [audit, setAudit] = useState<AuditResponse | null>(null);
@@ -151,8 +159,16 @@ export default function App() {
     setModels(response.items);
   };
 
-  const refreshDashboard = async (range = dashboardRange, dayDate = dashboardDayDate) => {
-    const response = await api.dashboard.get(range, range === "day" ? (dayDate ?? undefined) : undefined);
+  const refreshDashboard = async (
+    range = dashboardRange,
+    dayDate = dashboardDayDate,
+    filters = dashboardFilters
+  ) => {
+    const response = await api.dashboard.get(
+      range,
+      range === "day" ? (dayDate ?? undefined) : undefined,
+      filters
+    );
     setDashboard(response);
     if (range === "day") {
       setDashboardDayDate(response.anchorDate);
@@ -224,8 +240,26 @@ export default function App() {
   const handleDashboardDayDateChange = (date: string) => {
     const previousDate = dashboardDayDate;
     setDashboardDayDate(date);
-    void refreshDashboard("day", date).catch((reason) => {
+    void refreshDashboard("day", date, dashboardFilters).catch((reason) => {
       setDashboardDayDate(previousDate);
+      handleError(reason);
+    });
+  };
+
+  const handleDashboardFilterApply = (nextFilters: DashboardFilters) => {
+    const previousFilters = dashboardFilters;
+    setDashboardFilters(nextFilters);
+    void refreshDashboard(dashboardRange, dashboardDayDate, nextFilters).catch((reason) => {
+      setDashboardFilters(previousFilters);
+      handleError(reason);
+    });
+  };
+
+  const handleDashboardFilterClear = () => {
+    const previousFilters = dashboardFilters;
+    setDashboardFilters(EMPTY_DASHBOARD_FILTERS);
+    void refreshDashboard(dashboardRange, dashboardDayDate, EMPTY_DASHBOARD_FILTERS).catch((reason) => {
+      setDashboardFilters(previousFilters);
       handleError(reason);
     });
   };
@@ -325,6 +359,12 @@ export default function App() {
         {section === "dashboard" ? (
           <DashboardPage
             dashboard={dashboard}
+            providers={providers}
+            models={models}
+            apiKeys={auditApiKeys}
+            dashboardFilters={dashboardFilters}
+            applyDashboardFilters={handleDashboardFilterApply}
+            clearDashboardFilters={handleDashboardFilterClear}
             range={dashboardRange}
             setRange={setDashboardRange}
             setDayDate={handleDashboardDayDateChange}

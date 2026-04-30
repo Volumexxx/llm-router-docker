@@ -229,6 +229,12 @@ export interface DashboardSummary {
   apiKeyCards: DashboardCard[];
 }
 
+export interface DashboardFilters {
+  providerId: string;
+  modelAlias: string;
+  apiKeyId: string;
+}
+
 export interface AuditItem {
   id: string;
   occurred_at: string;
@@ -379,13 +385,25 @@ export const api = {
       })
   },
   dashboard: {
-    get: (range: "day" | "week" | "month", date?: string) => {
+    get: (range: "day" | "week" | "month", date?: string, filters?: Partial<DashboardFilters>) => {
       const params = new URLSearchParams({
         range
       });
 
       if (range === "day" && date) {
         params.set("date", date);
+      }
+
+      if (filters?.providerId) {
+        params.set("providerId", filters.providerId);
+      }
+
+      if (filters?.modelAlias) {
+        params.set("modelAlias", filters.modelAlias);
+      }
+
+      if (filters?.apiKeyId) {
+        params.set("apiKeyId", filters.apiKeyId);
       }
 
       return request<DashboardSummary>(`/admin/api/dashboard?${params.toString()}`, { method: "GET" });

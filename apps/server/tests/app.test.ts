@@ -55,7 +55,9 @@ function insertAuditRow(
     occurredAt: string;
     endpointType?: "chat_completions" | "responses" | "messages";
     statusCategory?: "success" | "unauthorized" | "configuration_error" | "upstream_error" | "network_error" | "security_policy";
+    providerId?: string | null;
     providerName?: string | null;
+    providerProtocol?: "openai" | "anthropic" | null;
     modelAlias?: string | null;
     apiKeyId?: string | null;
     apiKeyName?: string | null;
@@ -78,6 +80,7 @@ function insertAuditRow(
           endpoint_type,
           provider_id,
           provider_name,
+          provider_protocol,
           model_alias,
           upstream_model,
           api_key_id,
@@ -97,7 +100,7 @@ function insertAuditRow(
           client_ip,
           user_agent
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `
     )
     .run(
@@ -105,8 +108,9 @@ function insertAuditRow(
       crypto.randomUUID(),
       input.occurredAt,
       input.endpointType ?? "chat_completions",
-      null,
+      input.providerId === undefined ? null : input.providerId,
       input.providerName === undefined ? "test-provider" : input.providerName,
+      input.providerProtocol === undefined ? null : input.providerProtocol,
       input.modelAlias === undefined ? "test-model" : input.modelAlias,
       input.modelAlias === undefined ? "test-upstream" : input.modelAlias,
       input.apiKeyId === undefined ? "test-api-key-id" : input.apiKeyId,
@@ -2008,6 +2012,319 @@ describe("llm router server", () => {
 
       expect(response.statusCode).toBe(400);
       expect(response.json().error.code).toBe("validation_error");
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("filters dashboard metrics by provider id across protocol rows", async () => {
+    const app = await createTestApp(undefined, undefined, {
+      TIMEZONE: "Asia/Shanghai"
+    });
+
+    try {
+      const cookie = await login(app);
+      const providerA = await createProvider(app, cookie, {
+        name: "provider-a",
+        baseUrl: "https://provider-a.example/v1"
+      });
+      const providerB = await createProvider(app, cookie, {
+        name: "provider-b",
+        baseUrl: "https://provider-b.example/v1"
+      });
+
+      insertAuditRow(app, {
+        occurredAt: "2026-04-13T16:30:00.000Z",
+        providerId: providerA.id,
+        providerName: providerA.name,
+        providerProtocol: "openai",
+        modelAlias: "model-alpha",
+        apiKeyId: "key-a",
+        inputTokens: 10,
+        outputTokens: 5,
+        totalTokens: 15
+      });
+      insertAuditRow(app, {
+        occurredAt: "2026-04-13T18:30:00.000Z",
+        providerId: providerA.id,
+        providerName: providerA.name,
+        providerProtocol: "anthropic",
+        modelAlias: "model-beta",
+        apiKeyId: "key-b",
+        inputTokens: 20,
+        outputTokens: 8,
+        totalTokens: 28
+      });
+      insertAuditRow(app, {
+        occurredAt: "2026-04-13T19:30:00.000Z",
+        providerId: providerB.id,
+        providerName: providerB.name,
+        providerProtocol: "openai",
+        modelAlias: "model-gamma",
+        apiKeyId: "key-c",
+        inputTokens: 30,
+        outputTokens: 9,
+        totalTokens: 39
+      });
+
+      const response = await app.inject({
+        method: "GET",
+        url: `/admin/api/dashboard?range=day&date=2026-04-14&providerId=${providerA.id}`,
+        headers: {
+          cookie
+        }
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json().overall.requests).toBe(2);
+      expect(response.json().overall.totalTokens).toBe(43);
+      expect(response.json().providerCards.map((card: { label: string }) => card.label)).toEqual([
+        "provider-a (OpenAI)",
+        "provider-a (Anthropic)"
+      ]);
+      expect(
+        response.json().providerCards.some((card: { label: string }) => card.label.includes("provider-b"))
+      ).toBe(false);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("filters dashboard metrics by model alias", async () => {
+    const app = await createTestApp(undefined, undefined, {
+      TIMEZONE: "Asia/Shanghai"
+    });
+
+    try {
+      const cookie = await login(app);
+      const providerA = await createProvider(app, cookie, {
+        name: "provider-a",
+        baseUrl: "https://provider-a.example/v1"
+      });
+      const providerB = await createProvider(app, cookie, {
+        name: "provider-b",
+        baseUrl: "https://provider-b.example/v1"
+      });
+
+      insertAuditRow(app, {
+        occurredAt: "2026-04-13T16:30:00.000Z",
+        providerId: providerA.id,
+        providerName: providerA.name,
+        providerProtocol: "openai",
+        modelAlias: "model-alpha",
+        apiKeyId: "key-a",
+        inputTokens: 12,
+        outputTokens: 6,
+        totalTokens: 18
+      });
+      insertAuditRow(app, {
+        occurredAt: "2026-04-13T17:30:00.000Z",
+        providerId: providerB.id,
+        providerName: providerB.name,
+        providerProtocol: "openai",
+        modelAlias: "model-alpha",
+        apiKeyId: "key-b",
+        inputTokens: 8,
+        outputTokens: 4,
+        totalTokens: 12
+      });
+      insertAuditRow(app, {
+        occurredAt: "2026-04-13T18:30:00.000Z",
+        providerId: providerA.id,
+        providerName: providerA.name,
+        providerProtocol: "openai",
+        modelAlias: "model-beta",
+        apiKeyId: "key-c",
+        inputTokens: 50,
+        outputTokens: 10,
+        totalTokens: 60
+      });
+
+      const response = await app.inject({
+        method: "GET",
+        url: "/admin/api/dashboard?range=day&date=2026-04-14&modelAlias=model-alpha",
+        headers: {
+          cookie
+        }
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json().overall.requests).toBe(2);
+      expect(response.json().overall.totalTokens).toBe(30);
+      expect(response.json().modelCards).toHaveLength(1);
+      expect(response.json().modelCards[0]?.label).toBe("model-alpha");
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("filters dashboard metrics by api key id", async () => {
+    const app = await createTestApp(undefined, undefined, {
+      TIMEZONE: "Asia/Shanghai"
+    });
+
+    try {
+      const cookie = await login(app);
+      const provider = await createProvider(app, cookie, {
+        name: "provider-a",
+        baseUrl: "https://provider-a.example/v1"
+      });
+      const apiKeyA = await createGatewayApiKey(app, cookie, {
+        name: "mobile-client"
+      });
+      const apiKeyB = await createGatewayApiKey(app, cookie, {
+        name: "batch-client"
+      });
+
+      insertAuditRow(app, {
+        occurredAt: "2026-04-13T16:30:00.000Z",
+        providerId: provider.id,
+        providerName: provider.name,
+        providerProtocol: "openai",
+        modelAlias: "model-alpha",
+        apiKeyId: apiKeyA.id,
+        apiKeyName: apiKeyA.name,
+        apiKeyMaskedPreview: apiKeyA.maskedPreview,
+        inputTokens: 12,
+        outputTokens: 6,
+        totalTokens: 18
+      });
+      insertAuditRow(app, {
+        occurredAt: "2026-04-13T17:30:00.000Z",
+        providerId: provider.id,
+        providerName: provider.name,
+        providerProtocol: "openai",
+        modelAlias: "model-beta",
+        apiKeyId: apiKeyA.id,
+        apiKeyName: apiKeyA.name,
+        apiKeyMaskedPreview: apiKeyA.maskedPreview,
+        inputTokens: 4,
+        outputTokens: 2,
+        totalTokens: 6
+      });
+      insertAuditRow(app, {
+        occurredAt: "2026-04-13T18:30:00.000Z",
+        providerId: provider.id,
+        providerName: provider.name,
+        providerProtocol: "openai",
+        modelAlias: "model-gamma",
+        apiKeyId: apiKeyB.id,
+        apiKeyName: apiKeyB.name,
+        apiKeyMaskedPreview: apiKeyB.maskedPreview,
+        inputTokens: 40,
+        outputTokens: 10,
+        totalTokens: 50
+      });
+
+      const response = await app.inject({
+        method: "GET",
+        url: `/admin/api/dashboard?range=day&date=2026-04-14&apiKeyId=${apiKeyA.id}`,
+        headers: {
+          cookie
+        }
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json().overall.requests).toBe(2);
+      expect(response.json().overall.totalTokens).toBe(24);
+      expect(response.json().apiKeyCards).toHaveLength(1);
+      expect(response.json().apiKeyCards[0]?.label).toContain("mobile-client");
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("supports combined dashboard filters and returns empty stats for unknown ids", async () => {
+    const app = await createTestApp(undefined, undefined, {
+      TIMEZONE: "Asia/Shanghai"
+    });
+
+    try {
+      const cookie = await login(app);
+      const providerA = await createProvider(app, cookie, {
+        name: "provider-a",
+        baseUrl: "https://provider-a.example/v1"
+      });
+      const providerB = await createProvider(app, cookie, {
+        name: "provider-b",
+        baseUrl: "https://provider-b.example/v1"
+      });
+      const apiKeyA = await createGatewayApiKey(app, cookie, {
+        name: "mobile-client"
+      });
+      const apiKeyB = await createGatewayApiKey(app, cookie, {
+        name: "batch-client"
+      });
+
+      insertAuditRow(app, {
+        occurredAt: "2026-04-13T16:30:00.000Z",
+        providerId: providerA.id,
+        providerName: providerA.name,
+        providerProtocol: "openai",
+        modelAlias: "model-alpha",
+        apiKeyId: apiKeyA.id,
+        apiKeyName: apiKeyA.name,
+        apiKeyMaskedPreview: apiKeyA.maskedPreview,
+        inputTokens: 12,
+        outputTokens: 6,
+        totalTokens: 18
+      });
+      insertAuditRow(app, {
+        occurredAt: "2026-04-13T17:30:00.000Z",
+        providerId: providerA.id,
+        providerName: providerA.name,
+        providerProtocol: "anthropic",
+        modelAlias: "model-beta",
+        apiKeyId: apiKeyB.id,
+        apiKeyName: apiKeyB.name,
+        apiKeyMaskedPreview: apiKeyB.maskedPreview,
+        inputTokens: 20,
+        outputTokens: 8,
+        totalTokens: 28
+      });
+      insertAuditRow(app, {
+        occurredAt: "2026-04-13T18:30:00.000Z",
+        providerId: providerB.id,
+        providerName: providerB.name,
+        providerProtocol: "openai",
+        modelAlias: "model-beta",
+        apiKeyId: apiKeyB.id,
+        apiKeyName: apiKeyB.name,
+        apiKeyMaskedPreview: apiKeyB.maskedPreview,
+        inputTokens: 40,
+        outputTokens: 10,
+        totalTokens: 50
+      });
+
+      const filteredResponse = await app.inject({
+        method: "GET",
+        url: `/admin/api/dashboard?range=day&date=2026-04-14&providerId=${providerA.id}&modelAlias=model-beta&apiKeyId=${apiKeyB.id}`,
+        headers: {
+          cookie
+        }
+      });
+
+      expect(filteredResponse.statusCode).toBe(200);
+      expect(filteredResponse.json().overall.requests).toBe(1);
+      expect(filteredResponse.json().overall.totalTokens).toBe(28);
+      expect(filteredResponse.json().providerCards).toHaveLength(1);
+      expect(filteredResponse.json().modelCards).toHaveLength(1);
+      expect(filteredResponse.json().apiKeyCards).toHaveLength(1);
+
+      const emptyResponse = await app.inject({
+        method: "GET",
+        url: `/admin/api/dashboard?range=day&date=2026-04-14&providerId=${crypto.randomUUID()}`,
+        headers: {
+          cookie
+        }
+      });
+
+      expect(emptyResponse.statusCode).toBe(200);
+      expect(emptyResponse.json().overall.requests).toBe(0);
+      expect(emptyResponse.json().trend.every((point: { requests: number }) => point.requests === 0)).toBe(true);
+      expect(emptyResponse.json().providerCards).toHaveLength(0);
+      expect(emptyResponse.json().modelCards).toHaveLength(0);
+      expect(emptyResponse.json().apiKeyCards).toHaveLength(0);
     } finally {
       await app.close();
     }
