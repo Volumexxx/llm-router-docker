@@ -285,5 +285,104 @@ export const migrations: SqlMigration[] = [
       CREATE INDEX IF NOT EXISTS idx_audit_logs_provider_protocol
       ON audit_logs(provider_protocol);
     `
+  },
+  {
+    version: "006_user_accounts",
+    sql: `
+      ALTER TABLE admin_users ADD COLUMN role TEXT NOT NULL DEFAULT 'admin';
+      ALTER TABLE admin_users ADD COLUMN status TEXT NOT NULL DEFAULT 'approved';
+      ALTER TABLE admin_users ADD COLUMN display_name TEXT;
+      ALTER TABLE admin_users ADD COLUMN approved_at TEXT;
+      ALTER TABLE admin_users ADD COLUMN approved_by_user_id TEXT;
+
+      UPDATE admin_users
+      SET
+        display_name = COALESCE(NULLIF(display_name, ''), username),
+        approved_at = COALESCE(approved_at, updated_at);
+
+      CREATE TABLE IF NOT EXISTS user_provider_scopes (
+        user_id TEXT NOT NULL,
+        provider_id TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        UNIQUE(user_id, provider_id),
+        FOREIGN KEY(user_id) REFERENCES admin_users(id) ON DELETE CASCADE,
+        FOREIGN KEY(provider_id) REFERENCES providers(id) ON DELETE CASCADE
+      );
+
+      CREATE TABLE IF NOT EXISTS user_model_scopes (
+        user_id TEXT NOT NULL,
+        model_alias_id TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        UNIQUE(user_id, model_alias_id),
+        FOREIGN KEY(user_id) REFERENCES admin_users(id) ON DELETE CASCADE,
+        FOREIGN KEY(model_alias_id) REFERENCES model_aliases(id) ON DELETE CASCADE
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_user_provider_scopes_provider_id
+      ON user_provider_scopes(provider_id);
+
+      CREATE INDEX IF NOT EXISTS idx_user_model_scopes_model_alias_id
+      ON user_model_scopes(model_alias_id);
+
+      ALTER TABLE api_keys ADD COLUMN owner_user_id TEXT;
+      ALTER TABLE api_keys ADD COLUMN key_encrypted TEXT;
+      ALTER TABLE api_keys ADD COLUMN lookup_hash TEXT;
+      ALTER TABLE api_keys ADD COLUMN created_by_user_id TEXT;
+
+      UPDATE api_keys
+      SET owner_user_id = (
+        SELECT id
+        FROM admin_users
+        WHERE role = 'admin'
+        ORDER BY created_at ASC
+        LIMIT 1
+      )
+      WHERE owner_user_id IS NULL;
+
+      CREATE INDEX IF NOT EXISTS idx_api_keys_owner_user_id
+      ON api_keys(owner_user_id);
+
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_api_keys_lookup_hash
+      ON api_keys(lookup_hash)
+      WHERE lookup_hash IS NOT NULL;
+
+      ALTER TABLE audit_logs ADD COLUMN user_id TEXT;
+      ALTER TABLE audit_logs ADD COLUMN user_display_name TEXT;
+
+      CREATE INDEX IF NOT EXISTS idx_audit_logs_user_id
+      ON audit_logs(user_id);
+    `
+  },
+  {
+    version: "007_explicit_approved_user_scopes",
+    sql: `
+      INSERT OR IGNORE INTO user_provider_scopes (user_id, provider_id, created_at)
+      SELECT
+        admin_users.id,
+        providers.id,
+        strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      FROM admin_users
+      CROSS JOIN providers
+      WHERE admin_users.status = 'approved'
+        AND NOT EXISTS (
+          SELECT 1
+          FROM user_provider_scopes existing_scope
+          WHERE existing_scope.user_id = admin_users.id
+        );
+
+      INSERT OR IGNORE INTO user_model_scopes (user_id, model_alias_id, created_at)
+      SELECT
+        admin_users.id,
+        model_aliases.id,
+        strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      FROM admin_users
+      CROSS JOIN model_aliases
+      WHERE admin_users.status = 'approved'
+        AND NOT EXISTS (
+          SELECT 1
+          FROM user_model_scopes existing_scope
+          WHERE existing_scope.user_id = admin_users.id
+        );
+    `
   }
 ];

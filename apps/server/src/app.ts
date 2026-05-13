@@ -17,6 +17,8 @@ import { registerAdminDashboardRoutes } from "./routes/admin/dashboard.ts";
 import { registerAdminAuditRoutes } from "./routes/admin/audit.ts";
 import { registerAdminSecurityRoutes } from "./routes/admin/security.ts";
 import { registerAdminSystemRoutes } from "./routes/admin/system.ts";
+import { registerAdminUserRoutes } from "./routes/admin/users.ts";
+import { registerSelfServiceRoutes } from "./routes/admin/me.ts";
 import { registerGatewayRoutes } from "./routes/gateway.ts";
 import type { AppContext } from "./types.ts";
 
@@ -54,6 +56,7 @@ export async function buildApp(options?: {
 
   app.decorate("appCtx", appCtx);
   app.addHook("onRequest", async (request, reply) => {
+    request.currentUser = null;
     request.adminUser = null;
     request.gatewayApiKey = null;
     reply.header("x-request-id", request.id);
@@ -113,6 +116,8 @@ export async function buildApp(options?: {
   await registerAdminAuditRoutes(app);
   await registerAdminSecurityRoutes(app);
   await registerAdminSystemRoutes(app);
+  await registerAdminUserRoutes(app);
+  await registerSelfServiceRoutes(app);
   await registerGatewayRoutes(app);
 
   appCtx.state.ready = true;

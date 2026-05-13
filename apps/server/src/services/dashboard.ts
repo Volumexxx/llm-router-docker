@@ -41,6 +41,8 @@ interface AuditMetricRow {
   api_key_id: string | null;
   api_key_name: string | null;
   api_key_masked_preview: string | null;
+  user_id: string | null;
+  user_display_name: string | null;
 }
 
 interface ZonedDateTimeParts {
@@ -65,6 +67,7 @@ interface DashboardFilterInput {
   providerId?: string;
   modelAlias?: string;
   apiKeyId?: string;
+  userId?: string;
 }
 
 const HOUR_MS = 60 * 60 * 1000;
@@ -395,7 +398,9 @@ function toAuditMetricRow(row: Record<string, unknown>): AuditMetricRow {
     api_key_id: row.api_key_id != null ? String(row.api_key_id) : null,
     api_key_name: row.api_key_name != null ? String(row.api_key_name) : null,
     api_key_masked_preview:
-      row.api_key_masked_preview != null ? String(row.api_key_masked_preview) : null
+      row.api_key_masked_preview != null ? String(row.api_key_masked_preview) : null,
+    user_id: row.user_id != null ? String(row.user_id) : null,
+    user_display_name: row.user_display_name != null ? String(row.user_display_name) : null
   };
 }
 
@@ -452,6 +457,13 @@ export function buildDashboardSummary(
   const overallBuckets = makeBuckets(window.labels);
   const providerBuckets = new Map<string, BucketAccumulator[]>();
   const modelBuckets = new Map<string, BucketAccumulator[]>();
+  const userBuckets = new Map<
+    string,
+    {
+      label: string;
+      buckets: BucketAccumulator[];
+    }
+  >();
   const apiKeyBuckets = new Map<
     string,
     {
@@ -491,6 +503,8 @@ export function buildDashboardSummary(
         ? `${providerLabel} (${providerProtocol === "anthropic" ? "Anthropic" : "OpenAI"})`
         : providerLabel;
     const modelLabel = row.model_alias ?? "Unknown Model";
+    const userLabel = row.user_display_name ?? "Unknown User";
+    const userGroupKey = row.user_id ?? row.user_display_name ?? "unknown-user";
     const apiKeyLabel = formatApiKeyLabel(row.api_key_name, row.api_key_masked_preview);
     const apiKeyGroupKey = row.api_key_id ?? `${row.api_key_name ?? ""}:${row.api_key_masked_preview ?? ""}`;
 
@@ -505,6 +519,14 @@ export function buildDashboardSummary(
     const modelBucketList = modelBuckets.get(modelLabel) ?? makeBuckets(window.labels);
     accumulateBucket(modelBucketList[index], isSuccess, latency, tokens, cost);
     modelBuckets.set(modelLabel, modelBucketList);
+
+    const userBucketEntry = userBuckets.get(userGroupKey) ?? {
+      label: userLabel,
+      buckets: makeBuckets(window.labels)
+    };
+    userBucketEntry.label = userLabel;
+    accumulateBucket(userBucketEntry.buckets[index], isSuccess, latency, tokens, cost);
+    userBuckets.set(userGroupKey, userBucketEntry);
 
     const apiKeyBucketEntry = apiKeyBuckets.get(apiKeyGroupKey) ?? {
       label: apiKeyLabel,
@@ -551,6 +573,9 @@ export function buildDashboardSummary(
       missingUsageCount
     },
     trend: finalizeBuckets(overallBuckets),
+    userCards: Array.from(userBuckets.entries())
+      .map(([key, value]) => createCard(key, value.label, value.buckets))
+      .sort((left, right) => right.requests - left.requests),
     providerCards: Array.from(providerBuckets.entries())
       .map(([key, buckets]) => {
         const [providerName, protocol] = key.split(":");

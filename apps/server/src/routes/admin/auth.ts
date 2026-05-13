@@ -1,16 +1,37 @@
 import type { FastifyInstance } from "fastify";
 
-import { loginSchema } from "../../../../../packages/shared/src/index.ts";
-import { sendValidationError } from "../../lib/http.ts";
+import { loginSchema, registerSchema } from "../../../../../packages/shared/src/index.ts";
+import { sendJsonError, sendValidationError } from "../../lib/http.ts";
 import { nowIso } from "../../lib/utils.ts";
-import { enforceAdminIpAllowlist, requireAdminSession } from "../../security/auth.ts";
+import { requireSession } from "../../security/auth.ts";
 import { getClientIp, isRequestSecure } from "../../security/ip.ts";
 import { createSession, destroySessionByToken } from "../../security/session.ts";
 import { verifyCredential } from "../../security/crypto.ts";
 import { writeSecurityAuditFromRequest } from "../../services/audit.ts";
+import { isSqliteUniqueConstraintError } from "../../services/providers.ts";
+import { registerPendingUser } from "../../services/users.ts";
 
 export async function registerAdminAuthRoutes(app: FastifyInstance): Promise<void> {
-  app.post("/admin/api/auth/login", { preHandler: [enforceAdminIpAllowlist] }, async (request, reply) => {
+  app.post("/admin/api/auth/register", async (request, reply) => {
+    try {
+      const input = registerSchema.parse(request.body);
+      const user = await registerPendingUser(request.server.appCtx.database.sqlite, input);
+      reply.code(201).send({ user });
+    } catch (error) {
+      if (sendValidationError(reply, error)) {
+        return;
+      }
+
+      if (isSqliteUniqueConstraintError(error)) {
+        sendJsonError(reply, 409, "username_conflict", "Username already exists");
+        return;
+      }
+
+      throw error;
+    }
+  });
+
+  app.post("/admin/api/auth/login", async (request, reply) => {
     try {
       const input = loginSchema.parse(request.body);
       const { appCtx } = request.server;
@@ -46,6 +67,7 @@ export async function registerAdminAuthRoutes(app: FastifyInstance): Promise<voi
         .prepare(
           `
             SELECT id, username, password_hash
+                 , display_name, role, status
             FROM admin_users
             WHERE username = ?
             LIMIT 1
@@ -56,6 +78,9 @@ export async function registerAdminAuthRoutes(app: FastifyInstance): Promise<voi
             id: string;
             username: string;
             password_hash: string;
+            display_name: string | null;
+            role: "admin" | "user";
+            status: "pending" | "approved" | "rejected" | "disabled";
           }
         | undefined;
 
@@ -80,11 +105,33 @@ export async function registerAdminAuthRoutes(app: FastifyInstance): Promise<voi
         return;
       }
 
+      if (row.status !== "approved") {
+        const code =
+          row.status === "pending"
+            ? "account_pending_approval"
+            : row.status === "rejected"
+              ? "account_rejected"
+              : "account_disabled";
+        reply.code(403).send({
+          error: {
+            code,
+            message:
+              row.status === "pending"
+                ? "Account registration is waiting for administrator approval"
+                : "Account is not allowed to sign in"
+          }
+        });
+        return;
+      }
+
       const session = createSession(
         appCtx.database.sqlite,
         {
           id: row.id,
-          username: row.username
+          username: row.username,
+          displayName: row.display_name ?? row.username,
+          role: row.role,
+          status: row.status
         },
         appCtx.config.sessionTtlHours,
         ip,
@@ -111,7 +158,10 @@ export async function registerAdminAuthRoutes(app: FastifyInstance): Promise<voi
       reply.send({
         user: {
           id: row.id,
-          username: row.username
+          username: row.username,
+          displayName: row.display_name ?? row.username,
+          role: row.role,
+          status: row.status
         },
         loggedInAt: nowIso()
       });
@@ -124,13 +174,13 @@ export async function registerAdminAuthRoutes(app: FastifyInstance): Promise<voi
     }
   });
 
-  app.get("/admin/api/auth/me", { preHandler: [enforceAdminIpAllowlist, requireAdminSession] }, async (request) => ({
-    user: request.adminUser
+  app.get("/admin/api/auth/me", { preHandler: [requireSession] }, async (request) => ({
+    user: request.currentUser
   }));
 
   app.post(
     "/admin/api/auth/logout",
-    { preHandler: [enforceAdminIpAllowlist, requireAdminSession] },
+    { preHandler: [requireSession] },
     async (request, reply) => {
       const token = request.cookies[request.server.appCtx.config.cookieName];
       if (token) {

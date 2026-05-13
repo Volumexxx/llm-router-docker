@@ -33,11 +33,33 @@ export async function bootstrapIfNeeded(sqlite: DatabaseSync, config: RuntimeCon
     sqlite
       .prepare(
         `
-          INSERT INTO admin_users (id, username, password_hash, created_at, updated_at)
-          VALUES (?, ?, ?, ?, ?)
+          INSERT INTO admin_users (
+            id,
+            username,
+            password_hash,
+            role,
+            status,
+            display_name,
+            approved_at,
+            approved_by_user_id,
+            created_at,
+            updated_at
+          )
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `
       )
-      .run(createId(), config.bootstrapAdminUsername, passwordHash, timestamp, timestamp);
+      .run(
+        createId(),
+        config.bootstrapAdminUsername,
+        passwordHash,
+        "admin",
+        "approved",
+        config.bootstrapAdminUsername,
+        timestamp,
+        null,
+        timestamp,
+        timestamp
+      );
 
     setSetting(sqlite, "initialized_at", timestamp);
     sqlite.exec("COMMIT");

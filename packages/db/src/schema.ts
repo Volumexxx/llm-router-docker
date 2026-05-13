@@ -87,6 +87,11 @@ export const adminUsers = sqliteTable(
     id: text("id").primaryKey(),
     username: text("username").notNull(),
     passwordHash: text("password_hash").notNull(),
+    role: text("role").notNull().default("admin"),
+    status: text("status").notNull().default("approved"),
+    displayName: text("display_name"),
+    approvedAt: text("approved_at"),
+    approvedByUserId: text("approved_by_user_id"),
     createdAt: text("created_at").notNull(),
     updatedAt: text("updated_at").notNull()
   },
@@ -112,6 +117,10 @@ export const apiKeys = sqliteTable(
     id: text("id").primaryKey(),
     name: text("name").notNull(),
     keyHash: text("key_hash").notNull(),
+    lookupHash: text("lookup_hash"),
+    keyEncrypted: text("key_encrypted"),
+    ownerUserId: text("owner_user_id"),
+    createdByUserId: text("created_by_user_id"),
     maskedPreview: text("masked_preview").notNull(),
     enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
     deletedAt: text("deleted_at"),
@@ -122,6 +131,38 @@ export const apiKeys = sqliteTable(
   (table) => ({
     activeIndex: index("api_keys_enabled_deleted_index").on(table.enabled, table.deletedAt),
     createdIndex: index("api_keys_created_at_index").on(table.createdAt)
+  })
+);
+
+export const userProviderScopes = sqliteTable(
+  "user_provider_scopes",
+  {
+    userId: text("user_id").notNull(),
+    providerId: text("provider_id").notNull(),
+    createdAt: text("created_at").notNull()
+  },
+  (table) => ({
+    primary: uniqueIndex("user_provider_scopes_user_provider_unique").on(
+      table.userId,
+      table.providerId
+    ),
+    providerIndex: index("user_provider_scopes_provider_index").on(table.providerId)
+  })
+);
+
+export const userModelScopes = sqliteTable(
+  "user_model_scopes",
+  {
+    userId: text("user_id").notNull(),
+    modelAliasId: text("model_alias_id").notNull(),
+    createdAt: text("created_at").notNull()
+  },
+  (table) => ({
+    primary: uniqueIndex("user_model_scopes_user_model_unique").on(
+      table.userId,
+      table.modelAliasId
+    ),
+    modelIndex: index("user_model_scopes_model_index").on(table.modelAliasId)
   })
 );
 
@@ -178,6 +219,8 @@ export const auditLogs = sqliteTable(
     apiKeyId: text("api_key_id"),
     apiKeyName: text("api_key_name"),
     apiKeyMaskedPreview: text("api_key_masked_preview"),
+    userId: text("user_id"),
+    userDisplayName: text("user_display_name"),
     isStream: integer("is_stream", { mode: "boolean" }).notNull().default(false),
     statusCategory: text("status_category").notNull(),
     httpStatus: integer("http_status").notNull(),
@@ -199,7 +242,8 @@ export const auditLogs = sqliteTable(
     modelIndex: index("audit_logs_model_alias_index").on(table.modelAlias),
     statusIndex: index("audit_logs_status_category_index").on(table.statusCategory),
     endpointIndex: index("audit_logs_endpoint_type_index").on(table.endpointType),
-    apiKeyIndex: index("audit_logs_api_key_id_index").on(table.apiKeyId)
+    apiKeyIndex: index("audit_logs_api_key_id_index").on(table.apiKeyId),
+    userIndex: index("audit_logs_user_id_index").on(table.userId)
   })
 );
 

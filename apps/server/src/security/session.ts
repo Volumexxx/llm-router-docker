@@ -4,7 +4,7 @@ import type { DatabaseSync } from "node:sqlite";
 
 import { hashOpaqueToken } from "./crypto.ts";
 import { createId, nowIso } from "../lib/utils.ts";
-import type { AdminSessionUser } from "../types.ts";
+import type { ConsoleUser } from "../types.ts";
 
 export interface SessionRecord {
   id: string;
@@ -14,7 +14,7 @@ export interface SessionRecord {
 
 export function createSession(
   sqlite: DatabaseSync,
-  user: AdminSessionUser,
+  user: ConsoleUser,
   ttlHours: number,
   ip: string | null,
   userAgent: string | null
@@ -52,7 +52,7 @@ export function createSession(
 export function loadSessionUserByToken(
   sqlite: DatabaseSync,
   token: string
-): AdminSessionUser | null {
+): ConsoleUser | null {
   const now = nowIso();
   const row = sqlite
     .prepare(
@@ -60,6 +60,9 @@ export function loadSessionUserByToken(
         SELECT
           admin_users.id AS id,
           admin_users.username AS username,
+          admin_users.display_name AS display_name,
+          admin_users.role AS role,
+          admin_users.status AS status,
           admin_sessions.id AS session_id
         FROM admin_sessions
         INNER JOIN admin_users ON admin_users.id = admin_sessions.user_id
@@ -72,6 +75,9 @@ export function loadSessionUserByToken(
     | {
         id: string;
         username: string;
+        display_name: string | null;
+        role: "admin" | "user";
+        status: "pending" | "approved" | "rejected" | "disabled";
         session_id: string;
       }
     | undefined;
@@ -86,7 +92,10 @@ export function loadSessionUserByToken(
 
   return {
     id: row.id,
-    username: row.username
+    username: row.username,
+    displayName: row.display_name ?? row.username,
+    role: row.role,
+    status: row.status
   };
 }
 

@@ -98,7 +98,7 @@ function ScopeEditor({
         </div>
       )}
 
-      <p className="muted">全部不勾选表示该维度不受限。</p>
+      <p className="muted">Key 级范围仅保留用于历史兼容。</p>
     </div>
   );
 }

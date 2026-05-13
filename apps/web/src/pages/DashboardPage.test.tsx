@@ -57,6 +57,7 @@ describe("DashboardPage", () => {
           p95LatencyMs: 0
         }
       ],
+      userCards: [],
       providerCards: [
         {
           key: "provider-a",
@@ -379,7 +380,8 @@ describe("DashboardPage", () => {
     expect(applyDashboardFilters).toHaveBeenCalledWith({
       providerId: "provider-b",
       modelAlias: "claude-sonnet",
-      apiKeyId: "key-b"
+      apiKeyId: "key-b",
+      userId: ""
     });
   });
 

@@ -474,10 +474,10 @@ function buildScopeSets(gatewayScope?: GatewayRoutingScope): {
   allowedModelAliasIds: Set<string> | null;
 } {
   return {
-    allowedProviderIds: gatewayScope?.allowedProviderIds
+    allowedProviderIds: gatewayScope?.allowedProviderIds != null
       ? new Set(gatewayScope.allowedProviderIds)
       : null,
-    allowedModelAliasIds: gatewayScope?.allowedModelAliasIds
+    allowedModelAliasIds: gatewayScope?.allowedModelAliasIds != null
       ? new Set(gatewayScope.allowedModelAliasIds)
       : null
   };

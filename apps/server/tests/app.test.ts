@@ -4,6 +4,8 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { createSqliteConnection } from "../../../packages/db/src/index.ts";
+import { migrations } from "../../../packages/db/src/migrations.ts";
 import { buildApp } from "../src/app.ts";
 import { buildDashboardSummary } from "../src/services/dashboard.ts";
 
@@ -133,12 +135,20 @@ function insertAuditRow(
 }
 
 async function login(app: Awaited<ReturnType<typeof buildApp>>) {
+  return loginAs(app, "admin", "admin-password");
+}
+
+async function loginAs(
+  app: Awaited<ReturnType<typeof buildApp>>,
+  username: string,
+  password: string
+) {
   const response = await app.inject({
     method: "POST",
     url: "/admin/api/auth/login",
     payload: {
-      username: "admin",
-      password: "admin-password"
+      username,
+      password
     }
   });
 
@@ -351,6 +361,179 @@ async function createProviderAndModel(
 }
 
 describe("llm router server", () => {
+  it("backfills explicit scopes for already approved users during migration", async () => {
+    const dataDir = createTempDir();
+    cleanupDirs.push(dataDir);
+    const database = createSqliteConnection(dataDir);
+
+    try {
+      database.sqlite.exec(`
+        CREATE TABLE IF NOT EXISTS migration_state (
+          version TEXT PRIMARY KEY NOT NULL,
+          applied_at TEXT NOT NULL
+        );
+      `);
+
+      for (const migration of migrations.filter(
+        (item) => item.version !== "007_explicit_approved_user_scopes"
+      )) {
+        database.sqlite.exec("BEGIN");
+        database.sqlite.exec(migration.sql);
+        database.sqlite
+          .prepare("INSERT INTO migration_state (version, applied_at) VALUES (?, ?)")
+          .run(migration.version, new Date().toISOString());
+        database.sqlite.exec("COMMIT");
+      }
+
+      const now = new Date().toISOString();
+      database.sqlite
+        .prepare(
+          `
+            INSERT INTO system_settings (key, value, updated_at)
+            VALUES ('initialized_at', ?, ?)
+          `
+        )
+        .run(now, now);
+      database.sqlite
+        .prepare(
+          `
+            INSERT INTO providers (
+              id,
+              name,
+              base_url,
+              api_key_encrypted,
+              enabled,
+              test_timeout_ms,
+              created_at,
+              updated_at,
+              protocol,
+              api_version
+            )
+            VALUES (?, ?, ?, ?, 1, 10000, ?, ?, 'openai', NULL)
+          `
+        )
+        .run("provider-a", "Provider A", "https://provider-a.example/v1", "encrypted", now, now);
+      database.sqlite
+        .prepare(
+          `
+            INSERT INTO providers (
+              id,
+              name,
+              base_url,
+              api_key_encrypted,
+              enabled,
+              test_timeout_ms,
+              created_at,
+              updated_at,
+              protocol,
+              api_version
+            )
+            VALUES (?, ?, ?, ?, 1, 10000, ?, ?, 'openai', NULL)
+          `
+        )
+        .run("provider-b", "Provider B", "https://provider-b.example/v1", "encrypted", now, now);
+      database.sqlite
+        .prepare(
+          `
+            INSERT INTO model_aliases (id, alias, display_name, enabled, created_at, updated_at)
+            VALUES (?, ?, ?, 1, ?, ?)
+          `
+        )
+        .run("model-a", "model-a", "Model A", now, now);
+      database.sqlite
+        .prepare(
+          `
+            INSERT INTO model_aliases (id, alias, display_name, enabled, created_at, updated_at)
+            VALUES (?, ?, ?, 1, ?, ?)
+          `
+        )
+        .run("model-b", "model-b", "Model B", now, now);
+
+      const insertUser = database.sqlite.prepare(
+        `
+          INSERT INTO admin_users (
+            id,
+            username,
+            password_hash,
+            created_at,
+            updated_at,
+            role,
+            status,
+            display_name,
+            approved_at,
+            approved_by_user_id
+          )
+          VALUES (?, ?, 'hash', ?, ?, 'user', ?, ?, ?, NULL)
+        `
+      );
+      insertUser.run("approved-user", "approved", now, now, "approved", "approved", now);
+      insertUser.run("pending-user", "pending", now, now, "pending", "pending", null);
+      insertUser.run("partial-user", "partial", now, now, "approved", "partial", now);
+      database.sqlite
+        .prepare(
+          `
+            INSERT INTO user_provider_scopes (user_id, provider_id, created_at)
+            VALUES ('partial-user', 'provider-a', ?)
+          `
+        )
+        .run(now);
+    } finally {
+      database.sqlite.close();
+    }
+
+    const app = await buildApp({
+      configOverrides: {
+        NODE_ENV: "test",
+        DATA_DIR: dataDir,
+        CONFIG_ENCRYPTION_KEY: "0123456789abcdef0123456789abcdef",
+        BOOTSTRAP_ADMIN_USERNAME: "admin",
+        BOOTSTRAP_ADMIN_PASSWORD: "admin-password"
+      }
+    });
+
+    try {
+      const rows = app.appCtx.database.sqlite
+        .prepare(
+          `
+            SELECT admin_users.id, user_provider_scopes.provider_id, user_model_scopes.model_alias_id
+            FROM admin_users
+            LEFT JOIN user_provider_scopes ON user_provider_scopes.user_id = admin_users.id
+            LEFT JOIN user_model_scopes ON user_model_scopes.user_id = admin_users.id
+            ORDER BY admin_users.id ASC, user_provider_scopes.provider_id ASC, user_model_scopes.model_alias_id ASC
+          `
+        )
+        .all() as Array<{
+        id: string;
+        provider_id: string | null;
+        model_alias_id: string | null;
+      }>;
+
+      const scopesFor = (userId: string) => ({
+        providers: Array.from(
+          new Set(rows.filter((row) => row.id === userId).map((row) => row.provider_id).filter(Boolean))
+        ),
+        models: Array.from(
+          new Set(rows.filter((row) => row.id === userId).map((row) => row.model_alias_id).filter(Boolean))
+        )
+      });
+
+      expect(scopesFor("approved-user")).toEqual({
+        providers: ["provider-a", "provider-b"],
+        models: ["model-a", "model-b"]
+      });
+      expect(scopesFor("pending-user")).toEqual({
+        providers: [],
+        models: []
+      });
+      expect(scopesFor("partial-user")).toEqual({
+        providers: ["provider-a"],
+        models: ["model-a", "model-b"]
+      });
+    } finally {
+      await app.close();
+    }
+  });
+
   it("stores provider protocol and api version", async () => {
     const app = await createTestApp();
 
@@ -969,6 +1152,392 @@ describe("llm router server", () => {
               card.label.includes("mobile-client") && card.requests >= 1
           )
       ).toBe(true);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("registers pending users, approves them with a default key, and scopes gateway data by user", async () => {
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+
+      if (url.endsWith("/chat/completions")) {
+        return new Response(
+          JSON.stringify({
+            choices: [{ message: { role: "assistant", content: "scoped" } }],
+            usage: {
+              prompt_tokens: 6,
+              completion_tokens: 3,
+              total_tokens: 9
+            }
+          }),
+          {
+            status: 200,
+            headers: {
+              "content-type": "application/json"
+            }
+          }
+        );
+      }
+
+      return new Response(
+        JSON.stringify({
+          data: [{ id: "model" }]
+        }),
+        {
+          status: 200,
+          headers: {
+            "content-type": "application/json"
+          }
+        }
+      );
+    });
+    const app = await createTestApp(fetchImpl);
+
+    try {
+      const adminCookie = await login(app);
+      const provider = await createProvider(app, adminCookie, {
+        name: "scoped-provider",
+        baseUrl: "https://scoped-provider.example/v1"
+      });
+      const allowedModel = await createModel(app, adminCookie, {
+        alias: "allowed-model",
+        displayName: "Allowed Model"
+      });
+      const deniedModel = await createModel(app, adminCookie, {
+        alias: "denied-model",
+        displayName: "Denied Model"
+      });
+      await addBinding(app, adminCookie, allowedModel.id, {
+        providerId: provider.id,
+        upstreamModel: "allowed-upstream"
+      });
+      await addBinding(app, adminCookie, deniedModel.id, {
+        providerId: provider.id,
+        upstreamModel: "denied-upstream"
+      });
+
+      const registration = await app.inject({
+        method: "POST",
+        url: "/admin/api/auth/register",
+        payload: {
+          username: "alice",
+          password: "alice-password"
+        }
+      });
+
+      expect(registration.statusCode).toBe(201);
+      expect(registration.json().user.status).toBe("pending");
+
+      const pendingLogin = await app.inject({
+        method: "POST",
+        url: "/admin/api/auth/login",
+        payload: {
+          username: "alice",
+          password: "alice-password"
+        }
+      });
+
+      expect(pendingLogin.statusCode).toBe(403);
+      expect(pendingLogin.json().error.code).toBe("account_pending_approval");
+
+      const userId = registration.json().user.id as string;
+      const approve = await app.inject({
+        method: "POST",
+        url: `/admin/api/users/${userId}/approve`,
+        headers: {
+          cookie: adminCookie
+        },
+        payload: {
+          apiKeyPlaintext: "manual-alice-key"
+        }
+      });
+
+      expect(approve.statusCode).toBe(200);
+      expect(approve.json().item.status).toBe("approved");
+      expect(approve.json().apiKey.item.name).toBe("默认");
+      expect(approve.json().apiKey.createdKeyPlaintext).toBe("manual-alice-key");
+
+      const scopedOutModels = await app.inject({
+        method: "GET",
+        url: "/v1/models",
+        headers: {
+          authorization: "Bearer manual-alice-key"
+        }
+      });
+
+      expect(scopedOutModels.statusCode).toBe(200);
+      expect(scopedOutModels.json().data).toEqual([]);
+
+      const scopedOutCompletion = await app.inject({
+        method: "POST",
+        url: "/v1/chat/completions",
+        headers: {
+          authorization: "Bearer manual-alice-key"
+        },
+        payload: {
+          model: "allowed-model",
+          messages: [{ role: "user", content: "hi" }]
+        }
+      });
+
+      expect(scopedOutCompletion.statusCode).toBe(404);
+      expect(scopedOutCompletion.json().error.code).toBe("model_not_routable");
+
+      const scopeUpdate = await app.inject({
+        method: "PATCH",
+        url: `/admin/api/users/${userId}`,
+        headers: {
+          cookie: adminCookie
+        },
+        payload: {
+          allowedProviderIds: [provider.id],
+          allowedModelAliasIds: [allowedModel.id]
+        }
+      });
+
+      expect(scopeUpdate.statusCode).toBe(200);
+
+      const userCookie = await loginAs(app, "alice", "alice-password");
+      const selfKeys = await app.inject({
+        method: "GET",
+        url: "/admin/api/me/api-keys",
+        headers: {
+          cookie: userCookie
+        }
+      });
+
+      expect(selfKeys.statusCode).toBe(200);
+      expect(selfKeys.json().items).toHaveLength(1);
+      expect(selfKeys.json().items[0].maskedPreview).not.toBe("manual-alice-key");
+
+      const plaintext = await app.inject({
+        method: "GET",
+        url: `/admin/api/me/api-keys/${approve.json().apiKey.item.id}/plaintext`,
+        headers: {
+          cookie: userCookie
+        }
+      });
+
+      expect(plaintext.statusCode).toBe(200);
+      expect(plaintext.json().plaintext).toBe("manual-alice-key");
+
+      const visibleModels = await app.inject({
+        method: "GET",
+        url: "/v1/models",
+        headers: {
+          authorization: "Bearer manual-alice-key"
+        }
+      });
+
+      expect(visibleModels.statusCode).toBe(200);
+      expect(visibleModels.json().data.map((item: { id: string }) => item.id)).toEqual([
+        "allowed-model"
+      ]);
+
+      const deniedCompletion = await app.inject({
+        method: "POST",
+        url: "/v1/chat/completions",
+        headers: {
+          authorization: "Bearer manual-alice-key"
+        },
+        payload: {
+          model: "denied-model",
+          messages: [{ role: "user", content: "hi" }]
+        }
+      });
+
+      expect(deniedCompletion.statusCode).toBe(404);
+      expect(deniedCompletion.json().error.code).toBe("model_not_routable");
+
+      const allowedCompletion = await app.inject({
+        method: "POST",
+        url: "/v1/chat/completions",
+        headers: {
+          authorization: "Bearer manual-alice-key"
+        },
+        payload: {
+          model: "allowed-model",
+          messages: [{ role: "user", content: "hi" }]
+        }
+      });
+
+      expect(allowedCompletion.statusCode).toBe(200);
+
+      const userAudit = await app.inject({
+        method: "GET",
+        url: "/admin/api/audit?page=1&pageSize=20",
+        headers: {
+          cookie: userCookie
+        }
+      });
+
+      expect(userAudit.statusCode).toBe(200);
+      expect(
+        userAudit.json().items.every((item: { user_id: string | null }) => item.user_id === userId)
+      ).toBe(true);
+
+      const userDashboard = await app.inject({
+        method: "GET",
+        url: "/admin/api/dashboard?range=day",
+        headers: {
+          cookie: userCookie
+        }
+      });
+
+      expect(userDashboard.statusCode).toBe(200);
+      expect(userDashboard.json().overall.requests).toBe(3);
+      expect(userDashboard.json().providerCards).toHaveLength(1);
+      expect(userDashboard.json().userCards[0].label).toBe("alice");
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("lets users enable and disable only their own API keys", async () => {
+    const fetchImpl = vi.fn(async () =>
+      new Response(
+        JSON.stringify({
+          data: [{ id: "model" }]
+        }),
+        {
+          status: 200,
+          headers: {
+            "content-type": "application/json"
+          }
+        }
+      )
+    );
+    const app = await createTestApp(fetchImpl);
+
+    try {
+      const adminCookie = await login(app);
+      const provider = await createProvider(app, adminCookie, {
+        name: "self-toggle-provider",
+        baseUrl: "https://self-toggle-provider.example/v1"
+      });
+      const model = await createModel(app, adminCookie, {
+        alias: "self-toggle-model",
+        displayName: "Self Toggle Model"
+      });
+      await addBinding(app, adminCookie, model.id, {
+        providerId: provider.id,
+        upstreamModel: "self-toggle-upstream"
+      });
+      const adminKey = await createGatewayApiKey(app, adminCookie, {
+        name: "admin-owned"
+      });
+
+      const registration = await app.inject({
+        method: "POST",
+        url: "/admin/api/auth/register",
+        payload: {
+          username: "bob",
+          password: "bob-password"
+        }
+      });
+      expect(registration.statusCode).toBe(201);
+      const userId = registration.json().user.id as string;
+
+      const approve = await app.inject({
+        method: "POST",
+        url: `/admin/api/users/${userId}/approve`,
+        headers: {
+          cookie: adminCookie
+        },
+        payload: {
+          apiKeyPlaintext: "manual-bob-key"
+        }
+      });
+      expect(approve.statusCode).toBe(200);
+
+      const scopeUpdate = await app.inject({
+        method: "PATCH",
+        url: `/admin/api/users/${userId}`,
+        headers: {
+          cookie: adminCookie
+        },
+        payload: {
+          allowedProviderIds: [provider.id],
+          allowedModelAliasIds: [model.id]
+        }
+      });
+      expect(scopeUpdate.statusCode).toBe(200);
+
+      const userCookie = await loginAs(app, "bob", "bob-password");
+      const apiKeyId = approve.json().apiKey.item.id as string;
+
+      const cannotPatchOtherKey = await app.inject({
+        method: "PATCH",
+        url: `/admin/api/me/api-keys/${adminKey.id}`,
+        headers: {
+          cookie: userCookie
+        },
+        payload: {
+          enabled: false
+        }
+      });
+      expect(cannotPatchOtherKey.statusCode).toBe(404);
+
+      const visibleBeforeDisable = await app.inject({
+        method: "GET",
+        url: "/v1/models",
+        headers: {
+          authorization: "Bearer manual-bob-key"
+        }
+      });
+      expect(visibleBeforeDisable.statusCode).toBe(200);
+      expect(visibleBeforeDisable.json().data.map((item: { id: string }) => item.id)).toEqual([
+        "self-toggle-model"
+      ]);
+
+      const disabled = await app.inject({
+        method: "PATCH",
+        url: `/admin/api/me/api-keys/${apiKeyId}`,
+        headers: {
+          cookie: userCookie
+        },
+        payload: {
+          enabled: false
+        }
+      });
+      expect(disabled.statusCode).toBe(200);
+      expect(disabled.json().item.enabled).toBe(false);
+
+      const hiddenWhileDisabled = await app.inject({
+        method: "GET",
+        url: "/v1/models",
+        headers: {
+          authorization: "Bearer manual-bob-key"
+        }
+      });
+      expect(hiddenWhileDisabled.statusCode).toBe(401);
+      expect(hiddenWhileDisabled.json().error.code).toBe("gateway_auth_invalid");
+
+      const reenabled = await app.inject({
+        method: "PATCH",
+        url: `/admin/api/me/api-keys/${apiKeyId}`,
+        headers: {
+          cookie: userCookie
+        },
+        payload: {
+          enabled: true
+        }
+      });
+      expect(reenabled.statusCode).toBe(200);
+      expect(reenabled.json().item.enabled).toBe(true);
+
+      const visibleAfterReenable = await app.inject({
+        method: "GET",
+        url: "/v1/models",
+        headers: {
+          authorization: "Bearer manual-bob-key"
+        }
+      });
+      expect(visibleAfterReenable.statusCode).toBe(200);
+      expect(visibleAfterReenable.json().data.map((item: { id: string }) => item.id)).toEqual([
+        "self-toggle-model"
+      ]);
     } finally {
       await app.close();
     }

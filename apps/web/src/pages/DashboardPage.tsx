@@ -9,7 +9,8 @@ import type {
   DashboardSummary,
   ModelItem,
   ProviderItem,
-  TrendPoint
+  TrendPoint,
+  UserItem
 } from "../lib/api.ts";
 import {
   formatCost,
@@ -25,6 +26,8 @@ interface DashboardPageProps {
   providers: ProviderItem[];
   models: ModelItem[];
   apiKeys: ApiKeyItem[];
+  users?: UserItem[];
+  isAdmin?: boolean;
   dashboardFilters: DashboardFilters;
   applyDashboardFilters: (filters: DashboardFilters) => void;
   clearDashboardFilters: () => void;
@@ -33,7 +36,7 @@ interface DashboardPageProps {
   setDayDate: (date: string) => void;
 }
 
-type DashboardTabId = "provider" | "model" | "apiKey";
+type DashboardTabId = "user" | "provider" | "model" | "apiKey";
 type SortDirection = "asc" | "desc";
 type MetricKey =
   | "requests"
@@ -71,7 +74,8 @@ type SortState = {
 const EMPTY_FILTERS: DashboardFilters = {
   providerId: "",
   modelAlias: "",
-  apiKeyId: ""
+  apiKeyId: "",
+  userId: ""
 };
 
 const chartPalette = [
@@ -168,6 +172,11 @@ const dashboardTabs: Array<{
   getCards: (dashboard: DashboardSummary) => DashboardCard[];
 }> = [
   {
+    id: "user",
+    label: "User",
+    getCards: (dashboard) => dashboard.userCards
+  },
+  {
     id: "provider",
     label: "Provider",
     getCards: (dashboard) => dashboard.providerCards
@@ -208,7 +217,7 @@ function formatApiKeyFilterLabel(apiKey: ApiKeyItem): string {
 }
 
 function hasFilterValues(filters: DashboardFilters): boolean {
-  return Boolean(filters.providerId || filters.modelAlias || filters.apiKeyId);
+  return Boolean(filters.providerId || filters.modelAlias || filters.apiKeyId || filters.userId);
 }
 
 export function DashboardPage({
@@ -216,6 +225,8 @@ export function DashboardPage({
   providers,
   models,
   apiKeys,
+  users = [],
+  isAdmin = true,
   dashboardFilters,
   applyDashboardFilters,
   clearDashboardFilters,
@@ -225,19 +236,31 @@ export function DashboardPage({
 }: DashboardPageProps) {
   const [activeTab, setActiveTab] = useState<DashboardTabId>("provider");
   const [sortStateByTab, setSortStateByTab] = useState<Record<DashboardTabId, SortState>>({
+    user: { key: "requests", direction: "desc" },
     provider: { key: "requests", direction: "desc" },
     model: { key: "requests", direction: "desc" },
     apiKey: { key: "requests", direction: "desc" }
   });
   const [chartState, setChartState] = useState<ChartState | null>(null);
-  const [filterDraft, setFilterDraft] = useState<DashboardFilters>(dashboardFilters);
+  const normalizedDashboardFilters = useMemo(
+    () => ({ ...EMPTY_FILTERS, ...dashboardFilters }),
+    [dashboardFilters]
+  );
+  const [filterDraft, setFilterDraft] = useState<DashboardFilters>(normalizedDashboardFilters);
   const dayPickerRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
-    setFilterDraft(dashboardFilters);
-  }, [dashboardFilters]);
+    setFilterDraft(normalizedDashboardFilters);
+  }, [normalizedDashboardFilters]);
 
-  const currentTab = dashboardTabs.find((item) => item.id === activeTab) ?? dashboardTabs[0];
+  const availableTabs = useMemo(
+    () =>
+      dashboardTabs.filter((tab) =>
+        isAdmin ? true : tab.id === "model" || tab.id === "apiKey"
+      ),
+    [isAdmin]
+  );
+  const currentTab = availableTabs.find((item) => item.id === activeTab) ?? availableTabs[0];
   const currentSort = sortStateByTab[activeTab];
   const zonedToday = useMemo(
     () => formatDate(new Date(), dashboard?.timezone),
@@ -255,14 +278,25 @@ export function DashboardPage({
     () => [...apiKeys].sort((left, right) => left.name.localeCompare(right.name, "zh-CN")),
     [apiKeys]
   );
+  const userOptions = useMemo(
+    () => [...users].sort((left, right) => left.displayName.localeCompare(right.displayName, "zh-CN")),
+    [users]
+  );
   const hasPendingFilterChanges = useMemo(
     () =>
-      filterDraft.providerId !== dashboardFilters.providerId ||
-      filterDraft.modelAlias !== dashboardFilters.modelAlias ||
-      filterDraft.apiKeyId !== dashboardFilters.apiKeyId,
-    [dashboardFilters, filterDraft]
+      filterDraft.providerId !== normalizedDashboardFilters.providerId ||
+      filterDraft.modelAlias !== normalizedDashboardFilters.modelAlias ||
+      filterDraft.apiKeyId !== normalizedDashboardFilters.apiKeyId ||
+      filterDraft.userId !== normalizedDashboardFilters.userId,
+    [normalizedDashboardFilters, filterDraft]
   );
-  const hasActiveFilters = hasFilterValues(dashboardFilters);
+  const hasActiveFilters = hasFilterValues(normalizedDashboardFilters);
+
+  useEffect(() => {
+    if (!availableTabs.some((tab) => tab.id === activeTab)) {
+      setActiveTab(availableTabs[0]?.id ?? "model");
+    }
+  }, [activeTab, availableTabs]);
 
   const sortedRows = useMemo(() => {
     if (!dashboard) {
@@ -420,6 +454,7 @@ export function DashboardPage({
             </div>
           ) : null}
 
+          {isAdmin ? (
           <div className="dashboard-filter-panel">
             <div className="stack compact-stack">
               <h4>全局筛选</h4>
@@ -429,6 +464,24 @@ export function DashboardPage({
             </div>
 
             <div className="form-grid dashboard-filter-grid">
+              <label>
+                <span>User</span>
+                <select
+                  aria-label="Dashboard user filter"
+                  value={filterDraft.userId}
+                  onChange={(event) =>
+                    setFilterDraft((current) => ({ ...current, userId: event.target.value }))
+                  }
+                >
+                  <option value="">全部</option>
+                  {userOptions.map((user) => (
+                    <option key={user.id} value={user.id}>
+                      {user.displayName}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
               <label>
                 <span>Provider</span>
                 <select
@@ -511,6 +564,7 @@ export function DashboardPage({
               )}
             </div>
           </div>
+          ) : null}
         </div>
 
         <div className="metric-grid">
@@ -576,7 +630,7 @@ export function DashboardPage({
           </div>
 
           <div className="toolbar">
-            {dashboardTabs.map((tab) => (
+            {availableTabs.map((tab) => (
               <button
                 key={tab.id}
                 type="button"

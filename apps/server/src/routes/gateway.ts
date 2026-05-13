@@ -27,7 +27,9 @@ function buildApiKeyAuditContext(request: FastifyRequest) {
     ? {
         apiKeyId: request.gatewayApiKey.id,
         apiKeyName: request.gatewayApiKey.name,
-        apiKeyMaskedPreview: request.gatewayApiKey.maskedPreview
+        apiKeyMaskedPreview: request.gatewayApiKey.maskedPreview,
+        userId: request.gatewayApiKey.userId,
+        userDisplayName: request.gatewayApiKey.userDisplayName
       }
     : {};
 }
@@ -182,6 +184,8 @@ async function authorizeGatewayRequest(
     id: authResult.apiKey.id,
     name: authResult.apiKey.name,
     maskedPreview: authResult.apiKey.maskedPreview,
+    userId: authResult.apiKey.userId,
+    userDisplayName: authResult.apiKey.userDisplayName,
     allowedProviderIds: authResult.apiKey.allowedProviderIds,
     allowedModelAliasIds: authResult.apiKey.allowedModelAliasIds
   };

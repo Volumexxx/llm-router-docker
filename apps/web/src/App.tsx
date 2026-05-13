@@ -5,43 +5,43 @@ import {
   api,
   type ApiKeyItem,
   type AuditResponse,
+  type ConsoleUser,
   type DashboardFilters,
   type DashboardSummary,
   type ModelItem,
   type ProviderItem,
-  type SystemStatus
+  type SystemStatus,
+  type UserItem,
+  type VisibleModelItem
 } from "./lib/api.ts";
+import { ApiKeysPage } from "./pages/ApiKeysPage.tsx";
 import { AuditPage } from "./pages/AuditPage.tsx";
 import { DashboardPage } from "./pages/DashboardPage.tsx";
 import { LoginPage } from "./pages/LoginPage.tsx";
 import { ModelsPage } from "./pages/ModelsPage.tsx";
 import { ProvidersPage } from "./pages/ProvidersPage.tsx";
-import { SystemPage } from "./pages/SystemPage.tsx";
+import { RegisterPage, type RegisterForm } from "./pages/RegisterPage.tsx";
+import { buildUserDrafts, SystemUsersPage, type UserDraft } from "./pages/SystemUsersPage.tsx";
+import { UserModelsPage } from "./pages/UserModelsPage.tsx";
 
-type Section = "dashboard" | "providers" | "models" | "audit" | "system";
+type Section = "dashboard" | "providers" | "models" | "audit" | "apiKeys" | "users";
+type AuthMode = "login" | "register";
 
 type AuditFilters = {
   providerId: string;
   apiKeyId: string;
+  userId: string;
   modelAlias: string;
   statusCategory: string;
   endpointType: string;
   page: number;
 };
 
-type ApiKeyDraft = {
-  name: string;
-  enabled: boolean;
-  allProvidersAllowed: boolean;
-  allowedProviderIds: string[];
-  allModelsAllowed: boolean;
-  allowedModelAliasIds: string[];
-};
-
 const EMPTY_DASHBOARD_FILTERS: DashboardFilters = {
   providerId: "",
   modelAlias: "",
-  apiKeyId: ""
+  apiKeyId: "",
+  userId: ""
 };
 
 const sectionMeta: Record<
@@ -50,53 +50,65 @@ const sectionMeta: Record<
     label: string;
     title: string;
     description: string;
+    adminOnly?: boolean;
   }
 > = {
   dashboard: {
     label: "Dashboard",
     title: "概览看板",
-    description: "查看请求趋势、成功率、成本和延迟，快速掌握 Provider、Model 和 API Key 的运行情况。"
+    description: "查看运行指标总览和维度分析。"
   },
   providers: {
     label: "Providers",
     title: "Provider 管理",
-    description: "管理逻辑 Provider，并分别配置 OpenAI 与 Anthropic 两套上游连接。"
+    description: "管理上游 Provider 连接。",
+    adminOnly: true
   },
   models: {
     label: "Models & Routing",
     title: "模型与路由",
-    description: "共享对外模型 alias，并在 OpenAI / Anthropic 两个协议标签下分别维护路由绑定。"
+    description: "管理员维护路由；普通用户查看可用模型。"
   },
   audit: {
     label: "Audit",
     title: "审计日志",
-    description: "按时间、状态、Provider、模型和 API Key 筛选请求记录，定位异常更直接。"
+    description: "查看请求审计、Token 和错误摘要。"
   },
-  system: {
-    label: "System & API Keys",
-    title: "系统与 API Keys",
-    description: "查看系统状态、网关连通性和 API Key 授权范围，集中完成安全配置。"
+  apiKeys: {
+    label: "API Keys",
+    title: "API Keys",
+    description: "管理当前账号自己的 API Keys。"
+  },
+  users: {
+    label: "System & Users",
+    title: "系统与用户",
+    description: "查看系统状态、审批注册并配置用户权限。",
+    adminOnly: true
   }
 };
 
-function buildApiKeyDrafts(items: ApiKeyItem[]): Record<string, ApiKeyDraft> {
-  return Object.fromEntries(
-    items.map((item) => [
-      item.id,
-      {
-        name: item.name,
-        enabled: item.enabled,
-        allProvidersAllowed: item.allProvidersAllowed,
-        allowedProviderIds: item.allowedProviderIds,
-        allModelsAllowed: item.allModelsAllowed,
-        allowedModelAliasIds: item.allowedModelAliasIds
-      }
-    ])
+function visibleSections(user: ConsoleUser | null): Section[] {
+  const isAdmin = user?.role === "admin";
+  return (Object.keys(sectionMeta) as Section[]).filter(
+    (section) => isAdmin || !sectionMeta[section].adminOnly
   );
 }
 
+function mapVisibleModels(items: VisibleModelItem[]): ModelItem[] {
+  return items.map((item) => ({
+    id: item.alias,
+    alias: item.alias,
+    displayName: item.displayName,
+    enabled: true,
+    bindings: {
+      openai: [],
+      anthropic: []
+    }
+  }));
+}
+
 export default function App() {
-  const [user, setUser] = useState<{ id: string; username: string } | null>(null);
+  const [user, setUser] = useState<ConsoleUser | null>(null);
   const [loading, setLoading] = useState(true);
   const [section, setSection] = useState<Section>("dashboard");
   const [error, setError] = useState<string | null>(null);
@@ -104,16 +116,21 @@ export default function App() {
 
   const [providers, setProviders] = useState<ProviderItem[]>([]);
   const [models, setModels] = useState<ModelItem[]>([]);
+  const [visibleModels, setVisibleModels] = useState<VisibleModelItem[]>([]);
+  const [users, setUsers] = useState<UserItem[]>([]);
+  const [userDrafts, setUserDrafts] = useState<Record<string, UserDraft>>({});
 
   const [dashboardRange, setDashboardRange] = useState<"day" | "week" | "month">("day");
   const [dashboardDayDate, setDashboardDayDate] = useState<string | null>(null);
-  const [dashboardFilters, setDashboardFilters] = useState<DashboardFilters>(EMPTY_DASHBOARD_FILTERS);
+  const [dashboardFilters, setDashboardFilters] =
+    useState<DashboardFilters>(EMPTY_DASHBOARD_FILTERS);
   const [dashboard, setDashboard] = useState<DashboardSummary | null>(null);
 
   const [audit, setAudit] = useState<AuditResponse | null>(null);
   const [auditFilters, setAuditFilters] = useState<AuditFilters>({
     providerId: "",
     apiKeyId: "",
+    userId: "",
     modelAlias: "",
     statusCategory: "",
     endpointType: "",
@@ -123,7 +140,6 @@ export default function App() {
   const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null);
   const [apiKeys, setApiKeys] = useState<ApiKeyItem[]>([]);
   const [auditApiKeys, setAuditApiKeys] = useState<ApiKeyItem[]>([]);
-  const [apiKeyDrafts, setApiKeyDrafts] = useState<Record<string, ApiKeyDraft>>({});
   const [newApiKeyName, setNewApiKeyName] = useState("");
   const [createdApiKeyPlaintext, setCreatedApiKeyPlaintext] = useState<string | null>(null);
 
@@ -131,13 +147,22 @@ export default function App() {
     username: "",
     password: ""
   });
+  const [registerForm, setRegisterForm] = useState<RegisterForm>({
+    username: "",
+    password: "",
+    confirmPassword: ""
+  });
+  const [authMode, setAuthMode] = useState<AuthMode>("login");
 
-  const modelAliasOptions = useMemo(
-    () => models.map((model) => model.alias).sort((left, right) => left.localeCompare(right)),
-    [models]
-  );
-
+  const isAdmin = user?.role === "admin";
+  const availableSections = useMemo(() => visibleSections(user), [user]);
   const currentSectionMeta = sectionMeta[section];
+  const modelAliasOptions = useMemo(
+    () =>
+      (isAdmin ? models.map((model) => model.alias) : visibleModels.map((model) => model.alias))
+        .sort((left, right) => left.localeCompare(right)),
+    [isAdmin, models, visibleModels]
+  );
 
   const handleError = (reason: unknown) => {
     setError(reason instanceof Error ? reason.message : "操作失败，请稍后重试。");
@@ -154,20 +179,46 @@ export default function App() {
     setProviders(response.items);
   };
 
-  const refreshModels = async () => {
+  const refreshAdminModels = async () => {
     const response = await api.models.list();
     setModels(response.items);
+  };
+
+  const refreshUserModels = async () => {
+    const response = await api.me.models();
+    setVisibleModels(response.items);
+    setModels(mapVisibleModels(response.items));
+  };
+
+  const refreshUsers = async () => {
+    const response = await api.users.list();
+    setUsers(response.items);
+    setUserDrafts(buildUserDrafts(response.items));
+  };
+
+  const refreshOwnApiKeys = async (targetUser = user) => {
+    const response = await api.me.listApiKeys();
+    setApiKeys(response.items);
+    if (targetUser?.role !== "admin") {
+      setAuditApiKeys(response.items);
+    }
+  };
+
+  const refreshAdminApiKeys = async () => {
+    const response = await api.security.listApiKeys(true);
+    setAuditApiKeys(response.items);
   };
 
   const refreshDashboard = async (
     range = dashboardRange,
     dayDate = dashboardDayDate,
-    filters = dashboardFilters
+    filters = dashboardFilters,
+    targetUser = user
   ) => {
     const response = await api.dashboard.get(
       range,
       range === "day" ? (dayDate ?? undefined) : undefined,
-      filters
+      targetUser?.role === "admin" ? filters : EMPTY_DASHBOARD_FILTERS
     );
     setDashboard(response);
     if (range === "day") {
@@ -181,9 +232,7 @@ export default function App() {
       ...overrides,
       page
     };
-    const response = await api.audit.list({
-      ...nextFilters
-    });
+    const response = await api.audit.list(nextFilters);
     setAudit(response);
   };
 
@@ -192,22 +241,32 @@ export default function App() {
     setSystemStatus(response);
   };
 
-  const refreshApiKeys = async () => {
-    const response = await api.security.listApiKeys(true);
-    setAuditApiKeys(response.items);
-    const activeItems = response.items.filter((item) => !item.deletedAt);
-    setApiKeys(activeItems);
-    setApiKeyDrafts(buildApiKeyDrafts(activeItems));
-  };
+  const refreshAll = async (targetUser = user) => {
+    if (!targetUser) {
+      return;
+    }
 
-  const refreshAll = async () => {
+    if (targetUser.role === "admin") {
+      await Promise.all([
+        refreshProviders(),
+        refreshAdminModels(),
+        refreshUsers(),
+        refreshAdminApiKeys(),
+        refreshOwnApiKeys(targetUser),
+        refreshDashboard(dashboardRange, dashboardDayDate, dashboardFilters, targetUser),
+        refreshAudit(1),
+        refreshSystem()
+      ]);
+      return;
+    }
+
+    setProviders([]);
     await Promise.all([
-      refreshProviders(),
-      refreshModels(),
-      refreshDashboard(),
-      refreshAudit(1),
-      refreshSystem(),
-      refreshApiKeys()
+      refreshUserModels(),
+      refreshOwnApiKeys(targetUser),
+      refreshDashboard(dashboardRange, dashboardDayDate, EMPTY_DASHBOARD_FILTERS, targetUser),
+      refreshAudit(1, { providerId: "", userId: "" }),
+      refreshSystem()
     ]);
   };
 
@@ -216,7 +275,7 @@ export default function App() {
       try {
         const me = await api.auth.me();
         setUser(me.user);
-        await refreshAll();
+        await refreshAll(me.user);
       } catch (reason) {
         if (!(reason instanceof ApiError && reason.status === 401)) {
           handleError(reason);
@@ -230,17 +289,23 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (!availableSections.includes(section)) {
+      setSection("dashboard");
+    }
+  }, [availableSections, section]);
+
+  useEffect(() => {
     if (!user) {
       return;
     }
 
-    void refreshDashboard(dashboardRange).catch(handleError);
+    void refreshDashboard(dashboardRange, dashboardDayDate, dashboardFilters, user).catch(handleError);
   }, [dashboardRange, user]);
 
   const handleDashboardDayDateChange = (date: string) => {
     const previousDate = dashboardDayDate;
     setDashboardDayDate(date);
-    void refreshDashboard("day", date, dashboardFilters).catch((reason) => {
+    void refreshDashboard("day", date, dashboardFilters, user).catch((reason) => {
       setDashboardDayDate(previousDate);
       handleError(reason);
     });
@@ -249,7 +314,7 @@ export default function App() {
   const handleDashboardFilterApply = (nextFilters: DashboardFilters) => {
     const previousFilters = dashboardFilters;
     setDashboardFilters(nextFilters);
-    void refreshDashboard(dashboardRange, dashboardDayDate, nextFilters).catch((reason) => {
+    void refreshDashboard(dashboardRange, dashboardDayDate, nextFilters, user).catch((reason) => {
       setDashboardFilters(previousFilters);
       handleError(reason);
     });
@@ -258,20 +323,54 @@ export default function App() {
   const handleDashboardFilterClear = () => {
     const previousFilters = dashboardFilters;
     setDashboardFilters(EMPTY_DASHBOARD_FILTERS);
-    void refreshDashboard(dashboardRange, dashboardDayDate, EMPTY_DASHBOARD_FILTERS).catch((reason) => {
-      setDashboardFilters(previousFilters);
-      handleError(reason);
-    });
+    void refreshDashboard(dashboardRange, dashboardDayDate, EMPTY_DASHBOARD_FILTERS, user).catch(
+      (reason) => {
+        setDashboardFilters(previousFilters);
+        handleError(reason);
+      }
+    );
+  };
+
+  const copyApiKey = async (apiKeyId: string) => {
+    const response = await api.me.getApiKeyPlaintext(apiKeyId);
+    await navigator.clipboard.writeText(response.plaintext);
+    handleNotice("API Key 已复制到剪贴板。");
   };
 
   if (loading) {
-    return <main className="shell loading-state">正在加载管理控制台...</main>;
+    return <main className="shell loading-state">正在加载控制台...</main>;
   }
 
   if (!user) {
+    if (authMode === "register") {
+      return (
+        <RegisterPage
+          error={error}
+          registerForm={registerForm}
+          setRegisterForm={setRegisterForm}
+          onSubmit={(username, password) => {
+            void api.auth
+              .register(username, password)
+              .then(() => {
+                setRegisterForm({ username: "", password: "", confirmPassword: "" });
+                setAuthMode("login");
+                handleNotice("注册已提交，请等待管理员审批。");
+              })
+              .catch(handleError);
+          }}
+          onBackToLogin={() => {
+            setAuthMode("login");
+            setError(null);
+            setNotice(null);
+          }}
+        />
+      );
+    }
+
     return (
       <LoginPage
         error={error}
+        notice={notice}
         loginForm={loginForm}
         setLoginForm={setLoginForm}
         onSubmit={(event) => {
@@ -280,10 +379,16 @@ export default function App() {
             .login(loginForm.username, loginForm.password)
             .then(async (response) => {
               setUser(response.user);
-              await refreshAll();
+              await refreshAll(response.user);
               handleNotice("登录成功。");
             })
             .catch(handleError);
+        }}
+        onRegister={() => {
+          setRegisterForm({ username: "", password: "", confirmPassword: "" });
+          setAuthMode("register");
+          setError(null);
+          setNotice(null);
         }}
       />
     );
@@ -296,11 +401,11 @@ export default function App() {
           <div className="stack compact-stack">
             <p className="eyebrow">LLM Router</p>
             <h1>Public Router Console</h1>
-            <p className="muted">当前登录：{user.username}</p>
+            <p className="muted">当前登录：{user.displayName}</p>
           </div>
 
           <nav className="nav">
-            {(Object.keys(sectionMeta) as Section[]).map((value) => (
+            {availableSections.map((value) => (
               <button
                 key={value}
                 type="button"
@@ -362,6 +467,8 @@ export default function App() {
             providers={providers}
             models={models}
             apiKeys={auditApiKeys}
+            users={users}
+            isAdmin={isAdmin}
             dashboardFilters={dashboardFilters}
             applyDashboardFilters={handleDashboardFilterApply}
             clearDashboardFilters={handleDashboardFilterClear}
@@ -371,26 +478,37 @@ export default function App() {
           />
         ) : null}
 
-        {section === "providers" ? (
+        {section === "providers" && isAdmin ? (
           <ProvidersPage
             providers={providers}
             models={models}
             refreshProviders={refreshProviders}
-            refreshModels={refreshModels}
-            refreshApiKeys={refreshApiKeys}
+            refreshModels={refreshAdminModels}
+            refreshApiKeys={refreshAdminApiKeys}
             onNotice={handleNotice}
             onError={handleError}
           />
         ) : null}
 
-        {section === "models" ? (
+        {section === "models" && isAdmin ? (
           <ModelsPage
             models={models}
             providers={providers}
-            refreshModels={refreshModels}
+            refreshModels={refreshAdminModels}
             onNotice={handleNotice}
             onError={handleError}
             setError={(message) => setError(message)}
+          />
+        ) : null}
+
+        {section === "models" && !isAdmin ? (
+          <UserModelsPage
+            models={visibleModels}
+            onRefresh={() => {
+              void refreshUserModels()
+                .then(() => handleNotice("模型列表已刷新。"))
+                .catch(handleError);
+            }}
           />
         ) : null}
 
@@ -398,6 +516,8 @@ export default function App() {
           <AuditPage
             providers={providers}
             apiKeys={auditApiKeys}
+            users={users}
+            isAdmin={isAdmin}
             modelAliasOptions={modelAliasOptions}
             audit={audit}
             auditFilters={auditFilters}
@@ -407,14 +527,10 @@ export default function App() {
           />
         ) : null}
 
-        {section === "system" ? (
-          <SystemPage
+        {section === "apiKeys" ? (
+          <ApiKeysPage
             systemStatus={systemStatus}
-            providers={providers}
-            models={models}
             apiKeys={apiKeys}
-            apiKeyDrafts={apiKeyDrafts}
-            setApiKeyDrafts={setApiKeyDrafts}
             newApiKeyName={newApiKeyName}
             setNewApiKeyName={setNewApiKeyName}
             createdApiKeyPlaintext={createdApiKeyPlaintext}
@@ -424,50 +540,76 @@ export default function App() {
                 return;
               }
 
-              void api.security
-                .createApiKey({
-                  name: newApiKeyName.trim()
-                })
+              void api.me
+                .createApiKey({ name: newApiKeyName.trim() })
                 .then(async (response) => {
                   setNewApiKeyName("");
                   setCreatedApiKeyPlaintext(response.createdKeyPlaintext);
-                  await Promise.all([refreshApiKeys(), refreshSystem()]);
+                  await Promise.all([refreshOwnApiKeys(user), refreshSystem()]);
                   handleNotice(`API Key ${response.item.name} 已创建。`);
                 })
                 .catch(handleError);
             }}
-            onSaveApiKey={(apiKeyId) => {
-              const draft = apiKeyDrafts[apiKeyId];
-              if (!draft) {
-                setError("未找到要保存的 API Key 草稿。");
-                return;
-              }
-
-              void api.security
-                .updateApiKey(apiKeyId, {
-                  name: draft.name,
-                  enabled: draft.enabled,
-                  allowedProviderIds: draft.allProvidersAllowed ? [] : draft.allowedProviderIds,
-                  allowedModelAliasIds: draft.allModelsAllowed ? [] : draft.allowedModelAliasIds
-                })
-                .then(async (response) => {
-                  await Promise.all([refreshApiKeys(), refreshSystem()]);
-                  handleNotice(`API Key ${response.item.name} 已保存。`);
+            onCopyApiKey={(apiKeyId) => {
+              void copyApiKey(apiKeyId).catch(handleError);
+            }}
+            onToggleApiKeyEnabled={(apiKeyId, enabled) => {
+              void api.me
+                .updateApiKey(apiKeyId, { enabled })
+                .then(async () => {
+                  await Promise.all([refreshOwnApiKeys(user), refreshSystem(), refreshAudit(1)]);
+                  handleNotice(enabled ? "API Key 已启用。" : "API Key 已停用。");
                 })
                 .catch(handleError);
             }}
             onDeleteApiKey={(apiKeyId) => {
-              const current = apiKeys.find((item) => item.id === apiKeyId);
-              if (!current) {
-                setError("未找到对应的 API Key。");
+              void api.me
+                .deleteApiKey(apiKeyId)
+                .then(async () => {
+                  await Promise.all([refreshOwnApiKeys(user), refreshSystem(), refreshAudit(1)]);
+                  handleNotice("API Key 已删除。");
+                })
+                .catch(handleError);
+            }}
+          />
+        ) : null}
+
+        {section === "users" && isAdmin ? (
+          <SystemUsersPage
+            systemStatus={systemStatus}
+            users={users}
+            providers={providers}
+            models={models}
+            userDrafts={userDrafts}
+            setUserDrafts={setUserDrafts}
+            onApproveUser={(userId, apiKeyPlaintext) => {
+              void api.users
+                .approve(userId, apiKeyPlaintext)
+                .then(async (response) => {
+                  await Promise.all([refreshUsers(), refreshAdminApiKeys(), refreshSystem()]);
+                  handleNotice(
+                    `用户 ${response.item.displayName} 已审批，默认 API Key：${response.apiKey.createdKeyPlaintext}`
+                  );
+                })
+                .catch(handleError);
+            }}
+            onSaveUser={(userId) => {
+              const draft = userDrafts[userId];
+              if (!draft) {
+                setError("未找到用户配置草稿。");
                 return;
               }
 
-              void api.security
-                .deleteApiKey(apiKeyId)
-                .then(async () => {
-                  await Promise.all([refreshApiKeys(), refreshSystem(), refreshAudit(1)]);
-                  handleNotice(`API Key ${current.name} 已删除。`);
+              void api.users
+                .update(userId, {
+                  displayName: draft.displayName,
+                  status: draft.status,
+                  allowedProviderIds: draft.allowedProviderIds,
+                  allowedModelAliasIds: draft.allowedModelAliasIds
+                })
+                .then(async (response) => {
+                  await refreshUsers();
+                  handleNotice(`用户 ${response.item.displayName} 已保存。`);
                 })
                 .catch(handleError);
             }}

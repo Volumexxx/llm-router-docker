@@ -133,10 +133,43 @@ export interface ApiKeyItem {
   lastUsedAt: string | null;
   createdAt: string;
   updatedAt: string;
+  ownerUserId?: string | null;
+  createdByUserId?: string | null;
+  plaintextAvailable?: boolean;
   allowedProviderIds: string[];
   allowedModelAliasIds: string[];
   allProvidersAllowed: boolean;
   allModelsAllowed: boolean;
+}
+
+export type UserRole = "admin" | "user";
+export type UserStatus = "pending" | "approved" | "rejected" | "disabled";
+
+export interface ConsoleUser {
+  id: string;
+  username: string;
+  displayName: string;
+  role: UserRole;
+  status: UserStatus;
+}
+
+export interface UserItem extends ConsoleUser {
+  approvedAt: string | null;
+  approvedByUserId: string | null;
+  createdAt: string;
+  updatedAt: string;
+  allowedProviderIds: string[];
+  allowedModelAliasIds: string[];
+  allProvidersAllowed: boolean;
+  allModelsAllowed: boolean;
+  activeApiKeyCount: number;
+  totalApiKeyCount: number;
+}
+
+export interface VisibleModelItem {
+  alias: string;
+  displayName: string;
+  protocols: ProviderProtocol[];
 }
 
 export interface BindingPayload {
@@ -224,15 +257,17 @@ export interface DashboardSummary {
     missingUsageCount: number;
   };
   trend: TrendPoint[];
+  userCards: DashboardCard[];
   providerCards: DashboardCard[];
   modelCards: DashboardCard[];
   apiKeyCards: DashboardCard[];
 }
 
 export interface DashboardFilters {
-  providerId: string;
-  modelAlias: string;
-  apiKeyId: string;
+  providerId?: string;
+  modelAlias?: string;
+  apiKeyId?: string;
+  userId?: string;
 }
 
 export interface AuditItem {
@@ -245,6 +280,8 @@ export interface AuditItem {
   api_key_id: string | null;
   api_key_name: string | null;
   api_key_masked_preview: string | null;
+  user_id: string | null;
+  user_display_name: string | null;
   status_category: string;
   http_status: number;
   latency_ms: number;
@@ -295,17 +332,25 @@ export interface SystemStatus {
   appliedMigrations: string[];
   activeApiKeyCount: number;
   totalApiKeyCount: number;
+  activeUserCount?: number;
+  totalUserCount?: number;
+  pendingUserCount?: number;
   warnings: string[];
 }
 
 export const api = {
   auth: {
     me: () =>
-      request<{ user: { id: string; username: string } }>("/admin/api/auth/me", {
+      request<{ user: ConsoleUser }>("/admin/api/auth/me", {
         method: "GET"
       }),
     login: (username: string, password: string) =>
-      request<{ user: { id: string; username: string } }>("/admin/api/auth/login", {
+      request<{ user: ConsoleUser }>("/admin/api/auth/login", {
+        method: "POST",
+        body: JSON.stringify({ username, password })
+      }),
+    register: (username: string, password: string) =>
+      request<{ user: UserItem }>("/admin/api/auth/register", {
         method: "POST",
         body: JSON.stringify({ username, password })
       }),
@@ -406,6 +451,10 @@ export const api = {
         params.set("apiKeyId", filters.apiKeyId);
       }
 
+      if (filters?.userId) {
+        params.set("userId", filters.userId);
+      }
+
       return request<DashboardSummary>(`/admin/api/dashboard?${params.toString()}`, { method: "GET" });
     }
   },
@@ -441,6 +490,55 @@ export const api = {
     deleteApiKey: (apiKeyId: string) =>
       request<{ success: boolean }>(`/admin/api/security/api-keys/${apiKeyId}`, {
         method: "DELETE"
+      })
+  },
+  me: {
+    listApiKeys: () =>
+      request<{ items: ApiKeyItem[] }>("/admin/api/me/api-keys", {
+        method: "GET"
+      }),
+    createApiKey: (payload: { name: string }) =>
+      request<{ item: ApiKeyItem; createdKeyPlaintext: string }>("/admin/api/me/api-keys", {
+        method: "POST",
+        body: JSON.stringify(payload)
+      }),
+    getApiKeyPlaintext: (apiKeyId: string) =>
+      request<{ plaintext: string }>(`/admin/api/me/api-keys/${apiKeyId}/plaintext`, {
+        method: "GET"
+      }),
+    updateApiKey: (apiKeyId: string, payload: { enabled: boolean }) =>
+      request<{ item: ApiKeyItem }>(`/admin/api/me/api-keys/${apiKeyId}`, {
+        method: "PATCH",
+        body: JSON.stringify(payload)
+      }),
+    deleteApiKey: (apiKeyId: string) =>
+      request<{ success: boolean }>(`/admin/api/me/api-keys/${apiKeyId}`, {
+        method: "DELETE"
+      }),
+    models: () => request<{ items: VisibleModelItem[] }>("/admin/api/me/models", { method: "GET" })
+  },
+  users: {
+    list: () => request<{ items: UserItem[] }>("/admin/api/users", { method: "GET" }),
+    approve: (userId: string, apiKeyPlaintext?: string) =>
+      request<{ item: UserItem; apiKey: { item: ApiKeyItem; createdKeyPlaintext: string } }>(
+        `/admin/api/users/${userId}/approve`,
+        {
+          method: "POST",
+          body: JSON.stringify(apiKeyPlaintext ? { apiKeyPlaintext } : {})
+        }
+      ),
+    update: (
+      userId: string,
+      payload: Partial<{
+        displayName: string;
+        status: UserStatus;
+        allowedProviderIds: string[];
+        allowedModelAliasIds: string[];
+      }>
+    ) =>
+      request<{ item: UserItem }>(`/admin/api/users/${userId}`, {
+        method: "PATCH",
+        body: JSON.stringify(payload)
       })
   },
   system: {

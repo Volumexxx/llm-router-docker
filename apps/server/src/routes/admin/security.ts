@@ -6,7 +6,7 @@ import {
   apiKeyUpdateSchema
 } from "../../../../../packages/shared/src/index.ts";
 import { sendJsonError, sendValidationError } from "../../lib/http.ts";
-import { enforceAdminIpAllowlist, requireAdminSession } from "../../security/auth.ts";
+import { enforceAdminIpAllowlist, requireAdmin } from "../../security/auth.ts";
 import {
   ApiKeyScopeValidationError,
   createApiKey,
@@ -26,7 +26,7 @@ function sendScopeValidationError(reply: { code: (statusCode: number) => { send:
 }
 
 export async function registerAdminSecurityRoutes(app: FastifyInstance): Promise<void> {
-  const protectedHandlers = [enforceAdminIpAllowlist, requireAdminSession];
+  const protectedHandlers = [enforceAdminIpAllowlist, requireAdmin];
 
   app.get(
     "/admin/api/security/api-keys",
@@ -53,7 +53,11 @@ export async function registerAdminSecurityRoutes(app: FastifyInstance): Promise
     async (request, reply) => {
       try {
         const input = apiKeyCreateSchema.parse(request.body);
-        const result = await createApiKey(request.server.appCtx.database.sqlite, input);
+        const result = await createApiKey(request.server.appCtx.database.sqlite, input, {
+          ownerUserId: request.currentUser?.id ?? null,
+          createdByUserId: request.currentUser?.id ?? null,
+          encryptionKey: request.server.appCtx.config.configEncryptionKey
+        });
 
         writeSecurityAuditFromRequest(request.server.appCtx.database.sqlite, request, {
           requestId: request.id,

@@ -5,6 +5,7 @@ import type { FastifyRequest } from "fastify";
 import type { RuntimeConfig } from "../config.ts";
 import { deriveBaseUrl } from "../security/ip.ts";
 import { getApiKeyCounts } from "./api-keys.ts";
+import { getUserCounts } from "./users.ts";
 
 export function buildSystemStatus(
   sqlite: DatabaseSync,
@@ -14,14 +15,18 @@ export function buildSystemStatus(
     ready: boolean;
     readyErrors: string[];
     appliedMigrations: string[];
-  }
+  },
+  options: {
+    userId?: string;
+  } = {}
 ) {
   const detectedBaseUrl = deriveBaseUrl(request, config);
   const apiBaseUrl = `${config.externalBaseUrl ?? detectedBaseUrl}/v1`;
   const adminBaseUrl =
     config.adminExternalBaseUrl ?? `${config.externalBaseUrl ?? detectedBaseUrl}/admin`;
   const warnings: string[] = [];
-  const apiKeyCounts = getApiKeyCounts(sqlite);
+  const apiKeyCounts = getApiKeyCounts(sqlite, options.userId);
+  const userCounts = getUserCounts(sqlite);
 
   if (!config.trustProxy && request.headers["x-forwarded-host"]) {
     warnings.push("检测到代理头，但 TRUST_PROXY 未启用，来源 IP 与 HTTPS 判断可能不准确。");
@@ -67,6 +72,9 @@ export function buildSystemStatus(
     appliedMigrations: state.appliedMigrations,
     activeApiKeyCount: apiKeyCounts.activeApiKeyCount,
     totalApiKeyCount: apiKeyCounts.totalApiKeyCount,
+    activeUserCount: userCounts.activeUserCount,
+    totalUserCount: userCounts.totalUserCount,
+    pendingUserCount: userCounts.pendingUserCount,
     warnings
   };
 }

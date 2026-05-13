@@ -35,7 +35,7 @@ export async function enforceAdminIpAllowlist(
   });
 }
 
-export async function requireAdminSession(
+export async function requireSession(
   request: FastifyRequest,
   reply: FastifyReply
 ): Promise<void> {
@@ -45,6 +45,7 @@ export async function requireAdminSession(
 
   const token = request.cookies[request.server.appCtx.config.cookieName];
   if (!token) {
+    request.currentUser = null;
     request.adminUser = null;
     writeSecurityAuditFromRequest(request.server.appCtx.database.sqlite, request, {
       requestId: request.id,
@@ -66,6 +67,7 @@ export async function requireAdminSession(
 
   const user = loadSessionUserByToken(request.server.appCtx.database.sqlite, token);
   if (!user) {
+    request.currentUser = null;
     request.adminUser = null;
     writeSecurityAuditFromRequest(request.server.appCtx.database.sqlite, request, {
       requestId: request.id,
@@ -88,8 +90,45 @@ export async function requireAdminSession(
     return;
   }
 
-  request.adminUser = user;
+  if (user.status !== "approved") {
+    request.currentUser = null;
+    request.adminUser = null;
+    reply.clearCookie(request.server.appCtx.config.cookieName, {
+      path: "/"
+    });
+    reply.code(403).send({
+      error: {
+        code: "account_not_approved",
+        message: "Account is not approved"
+      }
+    });
+    return;
+  }
+
+  request.currentUser = user;
+  request.adminUser = user.role === "admin" ? user : null;
 }
+
+export async function requireAdmin(
+  request: FastifyRequest,
+  reply: FastifyReply
+): Promise<void> {
+  await requireSession(request, reply);
+  if (reply.sent) {
+    return;
+  }
+
+  if (request.currentUser?.role !== "admin") {
+    reply.code(403).send({
+      error: {
+        code: "admin_required",
+        message: "Administrator privileges are required"
+      }
+    });
+  }
+}
+
+export const requireAdminSession = requireAdmin;
 
 export function requireGatewayBearerToken(request: FastifyRequest): string | null {
   const header = request.headers.authorization;

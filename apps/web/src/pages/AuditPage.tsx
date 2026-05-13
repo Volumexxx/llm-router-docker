@@ -1,16 +1,19 @@
 import type { Dispatch, SetStateAction } from "react";
 
-import type { ApiKeyItem, AuditResponse, ProviderItem } from "../lib/api.ts";
+import type { ApiKeyItem, AuditResponse, ProviderItem, UserItem } from "../lib/api.ts";
 import { formatCost, formatDateTime, formatDuration, formatNumber } from "../lib/format.ts";
 
 interface AuditPageProps {
   providers: ProviderItem[];
   apiKeys: ApiKeyItem[];
+  users?: UserItem[];
+  isAdmin?: boolean;
   modelAliasOptions: string[];
   audit: AuditResponse | null;
   auditFilters: {
     providerId: string;
     apiKeyId: string;
+    userId: string;
     modelAlias: string;
     statusCategory: string;
     endpointType: string;
@@ -20,6 +23,7 @@ interface AuditPageProps {
     SetStateAction<{
       providerId: string;
       apiKeyId: string;
+      userId: string;
       modelAlias: string;
       statusCategory: string;
       endpointType: string;
@@ -31,6 +35,7 @@ interface AuditPageProps {
     overrides?: Partial<{
       providerId: string;
       apiKeyId: string;
+      userId: string;
       modelAlias: string;
       statusCategory: string;
       endpointType: string;
@@ -66,6 +71,8 @@ function formatTokenBreakdown(item: AuditResponse["items"][number]): string {
 export function AuditPage({
   providers,
   apiKeys,
+  users = [],
+  isAdmin = true,
   modelAliasOptions,
   audit,
   auditFilters,
@@ -88,6 +95,7 @@ export function AuditPage({
               const nextFilters = {
                 providerId: "",
                 apiKeyId: "",
+                userId: "",
                 modelAlias: "",
                 statusCategory: "",
                 endpointType: "",
@@ -102,6 +110,26 @@ export function AuditPage({
         </div>
 
         <div className="form-grid">
+          {isAdmin ? (
+          <label>
+            <span>User</span>
+            <select
+              value={auditFilters.userId ?? ""}
+              onChange={(event) =>
+                setAuditFilters((current) => ({ ...current, userId: event.target.value }))
+              }
+            >
+              <option value="">全部</option>
+              {users.map((user) => (
+                <option key={user.id} value={user.id}>
+                  {user.displayName}
+                </option>
+              ))}
+            </select>
+          </label>
+          ) : null}
+
+          {isAdmin ? (
           <label>
             <span>Provider</span>
             <select
@@ -118,6 +146,7 @@ export function AuditPage({
               ))}
             </select>
           </label>
+          ) : null}
 
           <label>
             <span>API Key</span>
@@ -218,7 +247,8 @@ export function AuditPage({
               <tr>
                 <th>时间</th>
                 <th>接口</th>
-                <th>Provider</th>
+                {isAdmin ? <th>User</th> : null}
+                {isAdmin ? <th>Provider</th> : null}
                 <th>模型</th>
                 <th>API Key</th>
                 <th>状态</th>
@@ -235,7 +265,8 @@ export function AuditPage({
                   <tr key={item.id}>
                     <td>{formatDateTime(item.occurred_at)}</td>
                     <td>{item.endpoint_type}</td>
-                    <td>{item.provider_name ?? "-"}</td>
+                    {isAdmin ? <td>{item.user_display_name ?? "-"}</td> : null}
+                    {isAdmin ? <td>{item.provider_name ?? "-"}</td> : null}
                     <td>{item.model_alias ?? item.upstream_model ?? "-"}</td>
                     <td>{formatAuditApiKey(item)}</td>
                     <td>{item.status_category}</td>
@@ -248,7 +279,7 @@ export function AuditPage({
                 ))
               ) : (
                 <tr>
-                  <td colSpan={11}>
+                  <td colSpan={isAdmin ? 12 : 10}>
                     <div className="table-empty">当前筛选条件下没有审计记录。</div>
                   </td>
                 </tr>

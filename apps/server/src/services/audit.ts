@@ -24,6 +24,8 @@ export interface AuditLogInput {
   apiKeyId?: string | null;
   apiKeyName?: string | null;
   apiKeyMaskedPreview?: string | null;
+  userId?: string | null;
+  userDisplayName?: string | null;
   isStream?: boolean;
   statusCategory: z.infer<typeof auditStatusSchema>;
   httpStatus: number;
@@ -56,6 +58,8 @@ export function writeAuditLog(sqlite: DatabaseSync, input: AuditLogInput): void 
           api_key_id,
           api_key_name,
           api_key_masked_preview,
+          user_id,
+          user_display_name,
           is_stream,
           status_category,
           http_status,
@@ -70,7 +74,7 @@ export function writeAuditLog(sqlite: DatabaseSync, input: AuditLogInput): void 
           client_ip,
           user_agent
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `
     )
     .run(
@@ -86,6 +90,8 @@ export function writeAuditLog(sqlite: DatabaseSync, input: AuditLogInput): void 
       input.apiKeyId ?? null,
       input.apiKeyName ?? null,
       input.apiKeyMaskedPreview ?? null,
+      input.userId ?? null,
+      input.userDisplayName ?? null,
       input.isStream ? 1 : 0,
       input.statusCategory,
       input.httpStatus,
@@ -157,6 +163,10 @@ export function queryAuditLogs(sqlite: DatabaseSync, input: AuditQueryInput) {
     clauses.push("api_key_id = ?");
     params.push(input.apiKeyId);
   }
+  if (input.userId) {
+    clauses.push("user_id = ?");
+    params.push(input.userId);
+  }
   if (input.modelAlias) {
     clauses.push("model_alias = ?");
     params.push(input.modelAlias);
@@ -217,6 +227,7 @@ export function queryInferenceAuditRows(
     providerId?: string;
     modelAlias?: string;
     apiKeyId?: string;
+    userId?: string;
   }
 ): Array<Record<string, unknown>> {
   const clauses = [
@@ -239,6 +250,11 @@ export function queryInferenceAuditRows(
   if (filters?.apiKeyId) {
     clauses.push("api_key_id = ?");
     params.push(filters.apiKeyId);
+  }
+
+  if (filters?.userId) {
+    clauses.push("user_id = ?");
+    params.push(filters.userId);
   }
 
   return sqlite

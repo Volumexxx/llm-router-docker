@@ -55,13 +55,18 @@ export const dashboardQuerySchema = z.object({
   date: dashboardDateSchema.optional(),
   providerId: z.string().uuid().optional(),
   modelAlias: z.string().optional(),
-  apiKeyId: z.string().uuid().optional()
+  apiKeyId: z.string().uuid().optional(),
+  userId: z.string().uuid().optional()
 });
 
 export const loginSchema = z.object({
   username: z.string().min(1).max(64),
   password: z.string().min(8).max(256)
 });
+
+export const registerSchema = loginSchema;
+export const userRoleSchema = z.enum(["admin", "user"]);
+export const userStatusSchema = z.enum(["pending", "approved", "rejected", "disabled"]);
 
 const providerProtocolConfigBaseSchema = z.object({
   baseUrl: z.string().url(),
@@ -157,6 +162,25 @@ const uuidArraySchema = z
   .array(z.string().uuid())
   .transform((items) => Array.from(new Set(items)));
 
+export const userApprovalSchema = z.object({
+  apiKeyPlaintext: z.string().min(1).max(512).optional()
+});
+
+export const userUpdateSchema = z.object({
+  displayName: z.string().min(1).max(120).optional(),
+  status: userStatusSchema.optional(),
+  allowedProviderIds: uuidArraySchema.optional(),
+  allowedModelAliasIds: uuidArraySchema.optional()
+});
+
+export const selfApiKeyCreateSchema = z.object({
+  name: z.string().min(1).max(120)
+});
+
+export const selfApiKeyUpdateSchema = z.object({
+  enabled: z.boolean()
+});
+
 export const apiKeyCreateSchema = z.object({
   name: z.string().min(1).max(120),
   allowedProviderIds: uuidArraySchema.default([]),
@@ -189,6 +213,7 @@ export const apiKeyListQuerySchema = z.object({
 export const auditQuerySchema = z.object({
   providerId: z.string().uuid().optional(),
   apiKeyId: z.string().uuid().optional(),
+  userId: z.string().uuid().optional(),
   modelAlias: z.string().optional(),
   statusCategory: auditStatusSchema.optional(),
   endpointType: endpointTypeSchema.optional(),
@@ -258,6 +283,7 @@ export interface DashboardSummary {
     missingUsageCount: number;
   };
   trend: TrendPoint[];
+  userCards: DashboardCard[];
   providerCards: DashboardCard[];
   modelCards: DashboardCard[];
   apiKeyCards: DashboardCard[];
