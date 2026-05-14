@@ -101,6 +101,7 @@ describe("timeout configuration limits", () => {
 
     expect(parsed).toEqual({
       range: "day",
+      scope: "self",
       date: "2026-04-15",
       providerId: "11111111-1111-4111-8111-111111111111",
       modelAlias: "gpt-4o-mini",

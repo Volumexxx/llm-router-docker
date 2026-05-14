@@ -28,6 +28,7 @@ export const auditStatusSchema = z.enum([
 ]);
 
 export const dashboardRangeSchema = z.enum(["day", "week", "month"]);
+export const dashboardScopeSchema = z.enum(["self", "all"]).default("self");
 const DASHBOARD_DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
 
 export function isValidDashboardDate(value: string): boolean {
@@ -52,6 +53,7 @@ export const dashboardDateSchema = z
 
 export const dashboardQuerySchema = z.object({
   range: dashboardRangeSchema.default("day"),
+  scope: dashboardScopeSchema,
   date: dashboardDateSchema.optional(),
   providerId: z.string().uuid().optional(),
   modelAlias: z.string().optional(),

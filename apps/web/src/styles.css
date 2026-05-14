@@ -422,6 +422,27 @@ textarea:focus {
   gap: 12px;
 }
 
+.dashboard-scope-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+}
+
+.dashboard-range-block {
+  display: grid;
+  justify-items: end;
+  gap: 6px;
+}
+
+.dashboard-control-label {
+  color: var(--muted);
+  font-size: 0.74rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  white-space: nowrap;
+}
+
 .dashboard-range-controls {
   justify-content: flex-end;
 }

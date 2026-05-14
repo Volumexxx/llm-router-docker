@@ -23,7 +23,7 @@ export async function registerAdminDashboardRoutes(app: FastifyInstance): Promis
             : {
                 modelAlias: query.modelAlias,
                 apiKeyId: query.apiKeyId,
-                userId: request.currentUser!.id
+                userId: query.scope === "all" ? undefined : request.currentUser!.id
               };
 
         reply.send(

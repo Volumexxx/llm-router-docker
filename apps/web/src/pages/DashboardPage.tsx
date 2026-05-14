@@ -6,6 +6,7 @@ import type {
   ApiKeyItem,
   DashboardCard,
   DashboardFilters,
+  DashboardScope,
   DashboardSummary,
   ModelItem,
   ProviderItem,
@@ -28,6 +29,8 @@ interface DashboardPageProps {
   apiKeys: ApiKeyItem[];
   users?: UserItem[];
   isAdmin?: boolean;
+  dashboardScope?: DashboardScope;
+  onDashboardScopeChange?: (scope: DashboardScope) => void;
   dashboardFilters: DashboardFilters;
   applyDashboardFilters: (filters: DashboardFilters) => void;
   clearDashboardFilters: () => void;
@@ -192,6 +195,9 @@ const dashboardTabs: Array<{
     getCards: (dashboard) => dashboard.apiKeyCards
   }
 ];
+const dashboardTabById = Object.fromEntries(
+  dashboardTabs.map((tab) => [tab.id, tab])
+) as Record<DashboardTabId, (typeof dashboardTabs)[number]>;
 
 function nextSortState(current: SortState, key: SortKey): SortState {
   if (current.key !== key) {
@@ -227,6 +233,8 @@ export function DashboardPage({
   apiKeys,
   users = [],
   isAdmin = true,
+  dashboardScope = "self",
+  onDashboardScopeChange,
   dashboardFilters,
   applyDashboardFilters,
   clearDashboardFilters,
@@ -253,15 +261,18 @@ export function DashboardPage({
     setFilterDraft(normalizedDashboardFilters);
   }, [normalizedDashboardFilters]);
 
-  const availableTabs = useMemo(
-    () =>
-      dashboardTabs.filter((tab) =>
-        isAdmin ? true : tab.id === "model" || tab.id === "apiKey"
-      ),
-    [isAdmin]
-  );
-  const currentTab = availableTabs.find((item) => item.id === activeTab) ?? availableTabs[0];
-  const currentSort = sortStateByTab[activeTab];
+  const availableTabs = useMemo(() => {
+    if (isAdmin) {
+      return dashboardTabs;
+    }
+
+    const tabIds: DashboardTabId[] =
+      dashboardScope === "all" ? ["model", "apiKey", "user"] : ["model", "apiKey"];
+    return tabIds.map((tabId) => dashboardTabById[tabId]);
+  }, [isAdmin, dashboardScope]);
+  const currentTab =
+    availableTabs.find((item) => item.id === activeTab) ?? availableTabs[0] ?? dashboardTabById.model;
+  const currentSort = sortStateByTab[currentTab.id];
   const zonedToday = useMemo(
     () => formatDate(new Date(), dashboard?.timezone),
     [dashboard?.timezone]
@@ -327,7 +338,7 @@ export function DashboardPage({
   const handleSort = (key: SortKey) => {
     setSortStateByTab((current) => ({
       ...current,
-      [activeTab]: nextSortState(current[activeTab], key)
+      [currentTab.id]: nextSortState(current[currentTab.id], key)
     }));
   };
 
@@ -401,6 +412,24 @@ export function DashboardPage({
     <div className="stack">
       <section className="panel hero-panel">
         <div className="stack dashboard-hero-head">
+          {!isAdmin ? (
+            <div className="dashboard-scope-row" aria-label="Dashboard scope">
+              <span className="dashboard-control-label">统计口径</span>
+              <div className="toolbar dashboard-scope-controls">
+                {(["self", "all"] as const).map((value) => (
+                  <button
+                    key={value}
+                    type="button"
+                    className={dashboardScope === value ? "chip active" : "chip"}
+                    onClick={() => onDashboardScopeChange?.(value)}
+                  >
+                    {value === "self" ? "个人" : "全部"}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : null}
+
           <div className="toolbar cluster-between">
             <div className="stack compact-stack">
               <p className="eyebrow">Metrics Command Center</p>
@@ -411,17 +440,20 @@ export function DashboardPage({
               </p>
             </div>
 
-            <div className="toolbar dashboard-range-controls">
-              {(["day", "week", "month"] as const).map((value) => (
-                <button
-                  key={value}
-                  type="button"
-                  className={range === value ? "chip active" : "chip"}
-                  onClick={() => setRange(value)}
-                >
-                  {value === "day" ? "Day" : value === "week" ? "Week" : "Month"}
-                </button>
-              ))}
+            <div className="dashboard-range-block">
+              {!isAdmin ? <span className="dashboard-control-label">时间范围</span> : null}
+              <div className="toolbar dashboard-range-controls">
+                {(["day", "week", "month"] as const).map((value) => (
+                  <button
+                    key={value}
+                    type="button"
+                    className={range === value ? "chip active" : "chip"}
+                    onClick={() => setRange(value)}
+                  >
+                    {value === "day" ? "Day" : value === "week" ? "Week" : "Month"}
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
 
@@ -692,7 +724,7 @@ export function DashboardPage({
                 </tr>
               ) : (
                 sortedRows.map((card) => (
-                  <tr key={`${activeTab}-${card.key}`}>
+                  <tr key={`${currentTab.id}-${card.key}`}>
                     <td>
                       <div className="table-entity">
                         <strong>{card.label}</strong>

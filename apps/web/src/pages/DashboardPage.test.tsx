@@ -19,6 +19,38 @@ vi.mock("../components/TrendChart.tsx", () => ({
 describe("DashboardPage", () => {
   const activeRenders: Array<{ unmount: () => Promise<void> }> = [];
 
+  function buildDashboardCard(key: string, label: string) {
+    return {
+      key,
+      label,
+      requests: 1,
+      successes: 1,
+      failures: 0,
+      inputTokens: 12,
+      outputTokens: 4,
+      cacheTokens: 0,
+      totalTokens: 16,
+      estimatedCost: 0,
+      averageLatencyMs: 120,
+      p95LatencyMs: 120,
+      trend: [
+        {
+          label: "00:00",
+          requests: 1,
+          successes: 1,
+          failures: 0,
+          inputTokens: 12,
+          outputTokens: 4,
+          cacheTokens: 0,
+          totalTokens: 16,
+          estimatedCost: 0,
+          averageLatencyMs: 120,
+          p95LatencyMs: 120
+        }
+      ]
+    };
+  }
+
   function buildDashboard(overrides: Partial<Record<string, unknown>> = {}) {
     return {
       range: "day" as const,
@@ -58,37 +90,7 @@ describe("DashboardPage", () => {
         }
       ],
       userCards: [],
-      providerCards: [
-        {
-          key: "provider-a",
-          label: "Provider A",
-          requests: 1,
-          successes: 1,
-          failures: 0,
-          inputTokens: 12,
-          outputTokens: 4,
-          cacheTokens: 0,
-          totalTokens: 16,
-          estimatedCost: 0,
-          averageLatencyMs: 120,
-          p95LatencyMs: 120,
-          trend: [
-            {
-              label: "00:00",
-              requests: 1,
-              successes: 1,
-              failures: 0,
-              inputTokens: 12,
-              outputTokens: 4,
-              cacheTokens: 0,
-              totalTokens: 16,
-              estimatedCost: 0,
-              averageLatencyMs: 120,
-              p95LatencyMs: 120
-            }
-          ]
-        }
-      ],
+      providerCards: [buildDashboardCard("provider-a", "Provider A")],
       modelCards: [],
       apiKeyCards: [],
       ...overrides
@@ -334,6 +336,127 @@ describe("DashboardPage", () => {
     expect(view.container.querySelector(".dashboard-day-subrow")).toBeNull();
   });
 
+  it("lets regular users switch between personal and all dashboard scopes", async () => {
+    const onDashboardScopeChange = vi.fn();
+    const dashboard = buildDashboard({
+      userCards: [buildDashboardCard("user-a", "alice")],
+      modelCards: [buildDashboardCard("model-a", "gpt-4o-mini")],
+      apiKeyCards: [buildDashboardCard("key-a", "mobile-client (lrk***123)")]
+    });
+    const view = await render(
+      <DashboardPage
+        dashboard={dashboard}
+        providers={buildProviders()}
+        models={buildModels()}
+        apiKeys={buildApiKeys()}
+        isAdmin={false}
+        dashboardScope="self"
+        onDashboardScopeChange={onDashboardScopeChange}
+        dashboardFilters={{ providerId: "", modelAlias: "", apiKeyId: "" }}
+        applyDashboardFilters={() => undefined}
+        clearDashboardFilters={() => undefined}
+        range="day"
+        setRange={() => undefined}
+        setDayDate={() => undefined}
+      />
+    );
+    activeRenders.push(view);
+
+    expect(getButtonByText(view.container, "个人").className).toContain("active");
+    expect(getButtonsByText(view.container, "全部")).toHaveLength(1);
+    expect(view.container.querySelector(".dashboard-scope-row")?.textContent).toContain("统计口径");
+    expect(view.container.querySelector(".dashboard-range-block")?.textContent).toContain("时间范围");
+    expect(
+      view.container
+        .querySelector(".dashboard-range-controls")
+        ?.contains(getButtonByText(view.container, "个人"))
+    ).toBe(false);
+    const scopeRow = view.container.querySelector(".dashboard-scope-row") as Element;
+    const rangeControls = view.container.querySelector(".dashboard-range-controls") as Element;
+    expect(
+      Boolean(scopeRow.compareDocumentPosition(rangeControls) & Node.DOCUMENT_POSITION_FOLLOWING)
+    ).toBe(true);
+    expect(getButtonsByText(view.container, "Model")).toHaveLength(1);
+    expect(getButtonsByText(view.container, "Key")).toHaveLength(1);
+    expect(getButtonsByText(view.container, "User")).toHaveLength(0);
+    expect(getButtonsByText(view.container, "Provider")).toHaveLength(0);
+    expect(view.container.querySelector(".dashboard-filter-panel")).toBeNull();
+
+    await click(getButtonByText(view.container, "全部"));
+    expect(onDashboardScopeChange).toHaveBeenCalledWith("all");
+
+    await view.rerender(
+      <DashboardPage
+        dashboard={dashboard}
+        providers={buildProviders()}
+        models={buildModels()}
+        apiKeys={buildApiKeys()}
+        isAdmin={false}
+        dashboardScope="all"
+        onDashboardScopeChange={onDashboardScopeChange}
+        dashboardFilters={{ providerId: "", modelAlias: "", apiKeyId: "" }}
+        applyDashboardFilters={() => undefined}
+        clearDashboardFilters={() => undefined}
+        range="day"
+        setRange={() => undefined}
+        setDayDate={() => undefined}
+      />
+    );
+
+    expect(getButtonByText(view.container, "全部").className).toContain("active");
+    expect(getButtonsByText(view.container, "User")).toHaveLength(1);
+  });
+
+  it("returns regular users to the Model tab after switching from all-user User tab to personal scope", async () => {
+    const dashboard = buildDashboard({
+      userCards: [buildDashboardCard("user-a", "alice")],
+      modelCards: [buildDashboardCard("model-a", "gpt-4o-mini")],
+      apiKeyCards: [buildDashboardCard("key-a", "mobile-client (lrk***123)")]
+    });
+    const view = await render(
+      <DashboardPage
+        dashboard={dashboard}
+        providers={buildProviders()}
+        models={buildModels()}
+        apiKeys={buildApiKeys()}
+        isAdmin={false}
+        dashboardScope="all"
+        onDashboardScopeChange={() => undefined}
+        dashboardFilters={{ providerId: "", modelAlias: "", apiKeyId: "" }}
+        applyDashboardFilters={() => undefined}
+        clearDashboardFilters={() => undefined}
+        range="day"
+        setRange={() => undefined}
+        setDayDate={() => undefined}
+      />
+    );
+    activeRenders.push(view);
+
+    await click(getButtonByText(view.container, "User"));
+    expect(getButtonByText(view.container, "User").className).toContain("active");
+
+    await view.rerender(
+      <DashboardPage
+        dashboard={dashboard}
+        providers={buildProviders()}
+        models={buildModels()}
+        apiKeys={buildApiKeys()}
+        isAdmin={false}
+        dashboardScope="self"
+        onDashboardScopeChange={() => undefined}
+        dashboardFilters={{ providerId: "", modelAlias: "", apiKeyId: "" }}
+        applyDashboardFilters={() => undefined}
+        clearDashboardFilters={() => undefined}
+        range="day"
+        setRange={() => undefined}
+        setDayDate={() => undefined}
+      />
+    );
+
+    expect(getButtonsByText(view.container, "User")).toHaveLength(0);
+    expect(getButtonByText(view.container, "Model").className).toContain("active");
+  });
+
   it("renders provider/model/key filters with all options and applies the selected filter values", async () => {
     const applyDashboardFilters = vi.fn();
     const view = await render(
@@ -351,6 +474,8 @@ describe("DashboardPage", () => {
       />
     );
     activeRenders.push(view);
+
+    expect(view.container.querySelector(".dashboard-scope-row")).toBeNull();
 
     const providerSelect = view.container.querySelector(
       'select[aria-label="Dashboard provider filter"]'

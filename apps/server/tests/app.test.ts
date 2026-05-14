@@ -1364,6 +1364,23 @@ describe("llm router server", () => {
 
       expect(allowedCompletion.statusCode).toBe(200);
 
+      const adminKey = await createGatewayApiKey(app, adminCookie, {
+        name: "admin-dashboard-key"
+      });
+      const adminCompletion = await app.inject({
+        method: "POST",
+        url: "/v1/chat/completions",
+        headers: {
+          authorization: `Bearer ${adminKey.plaintext}`
+        },
+        payload: {
+          model: "allowed-model",
+          messages: [{ role: "user", content: "hi" }]
+        }
+      });
+
+      expect(adminCompletion.statusCode).toBe(200);
+
       const userAudit = await app.inject({
         method: "GET",
         url: "/admin/api/audit?page=1&pageSize=20",
@@ -1389,6 +1406,23 @@ describe("llm router server", () => {
       expect(userDashboard.json().overall.requests).toBe(3);
       expect(userDashboard.json().providerCards).toHaveLength(1);
       expect(userDashboard.json().userCards[0].label).toBe("alice");
+
+      const allDashboard = await app.inject({
+        method: "GET",
+        url: "/admin/api/dashboard?range=day&scope=all",
+        headers: {
+          cookie: userCookie
+        }
+      });
+
+      expect(allDashboard.statusCode).toBe(200);
+      expect(allDashboard.json().overall.requests).toBe(4);
+      expect(
+        allDashboard
+          .json()
+          .userCards.map((card: { label: string }) => card.label)
+          .sort()
+      ).toEqual(["admin", "alice"]);
     } finally {
       await app.close();
     }
@@ -2581,6 +2615,17 @@ describe("llm router server", () => {
 
       expect(response.statusCode).toBe(400);
       expect(response.json().error.code).toBe("validation_error");
+
+      const invalidScope = await app.inject({
+        method: "GET",
+        url: "/admin/api/dashboard?range=day&scope=team",
+        headers: {
+          cookie
+        }
+      });
+
+      expect(invalidScope.statusCode).toBe(400);
+      expect(invalidScope.json().error.code).toBe("validation_error");
     } finally {
       await app.close();
     }

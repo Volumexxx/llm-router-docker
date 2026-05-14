@@ -270,6 +270,8 @@ export interface DashboardFilters {
   userId?: string;
 }
 
+export type DashboardScope = "self" | "all";
+
 export interface AuditItem {
   id: string;
   occurred_at: string;
@@ -430,10 +432,19 @@ export const api = {
       })
   },
   dashboard: {
-    get: (range: "day" | "week" | "month", date?: string, filters?: Partial<DashboardFilters>) => {
+    get: (
+      range: "day" | "week" | "month",
+      date?: string,
+      filters?: Partial<DashboardFilters>,
+      scope?: DashboardScope
+    ) => {
       const params = new URLSearchParams({
         range
       });
+
+      if (scope) {
+        params.set("scope", scope);
+      }
 
       if (range === "day" && date) {
         params.set("date", date);

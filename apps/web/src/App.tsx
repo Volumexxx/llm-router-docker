@@ -7,6 +7,7 @@ import {
   type AuditResponse,
   type ConsoleUser,
   type DashboardFilters,
+  type DashboardScope,
   type DashboardSummary,
   type ModelItem,
   type ProviderItem,
@@ -121,6 +122,7 @@ export default function App() {
   const [userDrafts, setUserDrafts] = useState<Record<string, UserDraft>>({});
 
   const [dashboardRange, setDashboardRange] = useState<"day" | "week" | "month">("day");
+  const [dashboardScope, setDashboardScope] = useState<DashboardScope>("self");
   const [dashboardDayDate, setDashboardDayDate] = useState<string | null>(null);
   const [dashboardFilters, setDashboardFilters] =
     useState<DashboardFilters>(EMPTY_DASHBOARD_FILTERS);
@@ -213,12 +215,14 @@ export default function App() {
     range = dashboardRange,
     dayDate = dashboardDayDate,
     filters = dashboardFilters,
-    targetUser = user
+    targetUser = user,
+    scope = dashboardScope
   ) => {
     const response = await api.dashboard.get(
       range,
       range === "day" ? (dayDate ?? undefined) : undefined,
-      targetUser?.role === "admin" ? filters : EMPTY_DASHBOARD_FILTERS
+      targetUser?.role === "admin" ? filters : EMPTY_DASHBOARD_FILTERS,
+      targetUser?.role === "admin" ? undefined : scope
     );
     setDashboard(response);
     if (range === "day") {
@@ -241,7 +245,7 @@ export default function App() {
     setSystemStatus(response);
   };
 
-  const refreshAll = async (targetUser = user) => {
+  const refreshAll = async (targetUser = user, scope = dashboardScope) => {
     if (!targetUser) {
       return;
     }
@@ -264,7 +268,13 @@ export default function App() {
     await Promise.all([
       refreshUserModels(),
       refreshOwnApiKeys(targetUser),
-      refreshDashboard(dashboardRange, dashboardDayDate, EMPTY_DASHBOARD_FILTERS, targetUser),
+      refreshDashboard(
+        dashboardRange,
+        dashboardDayDate,
+        EMPTY_DASHBOARD_FILTERS,
+        targetUser,
+        scope
+      ),
       refreshAudit(1, { providerId: "", userId: "" }),
       refreshSystem()
     ]);
@@ -305,7 +315,7 @@ export default function App() {
   const handleDashboardDayDateChange = (date: string) => {
     const previousDate = dashboardDayDate;
     setDashboardDayDate(date);
-    void refreshDashboard("day", date, dashboardFilters, user).catch((reason) => {
+    void refreshDashboard("day", date, dashboardFilters, user, dashboardScope).catch((reason) => {
       setDashboardDayDate(previousDate);
       handleError(reason);
     });
@@ -314,7 +324,7 @@ export default function App() {
   const handleDashboardFilterApply = (nextFilters: DashboardFilters) => {
     const previousFilters = dashboardFilters;
     setDashboardFilters(nextFilters);
-    void refreshDashboard(dashboardRange, dashboardDayDate, nextFilters, user).catch((reason) => {
+    void refreshDashboard(dashboardRange, dashboardDayDate, nextFilters, user, dashboardScope).catch((reason) => {
       setDashboardFilters(previousFilters);
       handleError(reason);
     });
@@ -323,9 +333,20 @@ export default function App() {
   const handleDashboardFilterClear = () => {
     const previousFilters = dashboardFilters;
     setDashboardFilters(EMPTY_DASHBOARD_FILTERS);
-    void refreshDashboard(dashboardRange, dashboardDayDate, EMPTY_DASHBOARD_FILTERS, user).catch(
+    void refreshDashboard(dashboardRange, dashboardDayDate, EMPTY_DASHBOARD_FILTERS, user, dashboardScope).catch(
       (reason) => {
         setDashboardFilters(previousFilters);
+        handleError(reason);
+      }
+    );
+  };
+
+  const handleDashboardScopeChange = (scope: DashboardScope) => {
+    const previousScope = dashboardScope;
+    setDashboardScope(scope);
+    void refreshDashboard(dashboardRange, dashboardDayDate, dashboardFilters, user, scope).catch(
+      (reason) => {
+        setDashboardScope(previousScope);
         handleError(reason);
       }
     );
@@ -378,8 +399,9 @@ export default function App() {
           void api.auth
             .login(loginForm.username, loginForm.password)
             .then(async (response) => {
+              setDashboardScope("self");
               setUser(response.user);
-              await refreshAll(response.user);
+              await refreshAll(response.user, "self");
               handleNotice("登录成功。");
             })
             .catch(handleError);
@@ -438,6 +460,7 @@ export default function App() {
               void api.auth
                 .logout()
                 .then(() => {
+                  setDashboardScope("self");
                   setUser(null);
                   handleNotice("已退出登录。");
                 })
@@ -469,6 +492,8 @@ export default function App() {
             apiKeys={auditApiKeys}
             users={users}
             isAdmin={isAdmin}
+            dashboardScope={dashboardScope}
+            onDashboardScopeChange={handleDashboardScopeChange}
             dashboardFilters={dashboardFilters}
             applyDashboardFilters={handleDashboardFilterApply}
             clearDashboardFilters={handleDashboardFilterClear}
