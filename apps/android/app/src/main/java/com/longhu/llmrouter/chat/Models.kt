@@ -2,6 +2,7 @@ package com.longhu.llmrouter.chat
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import java.security.MessageDigest
 
 enum class GatewayProtocol(val wireName: String) {
   OpenAi("openai"),
@@ -10,6 +11,20 @@ enum class GatewayProtocol(val wireName: String) {
   companion object {
     fun fromWire(value: String): GatewayProtocol =
       if (value == "anthropic") Anthropic else OpenAi
+  }
+}
+
+@Serializable
+enum class OpenAiRequestType(val wireName: String) {
+  @SerialName("chat")
+  Chat("chat"),
+
+  @SerialName("response")
+  Response("response");
+
+  companion object {
+    fun fromWire(value: String?): OpenAiRequestType =
+      if (value == Response.wireName) Response else Chat
   }
 }
 
@@ -89,6 +104,59 @@ data class VisibleModel(
     } else {
       GatewayProtocol.Anthropic
     }
+
+  val supportsOpenAi: Boolean
+    get() = gatewayProtocols.contains(GatewayProtocol.OpenAi)
+}
+
+const val DefaultMaxOutputTokens = 2048
+
+@Serializable
+data class ModelRuntimeSettings(
+  val modelAlias: String,
+  val requestType: OpenAiRequestType = OpenAiRequestType.Chat,
+  val contextMaxTokens: Int? = null,
+  val maxOutputTokens: Int = DefaultMaxOutputTokens
+) {
+  fun normalized(alias: String = modelAlias): ModelRuntimeSettings =
+    copy(
+      modelAlias = alias,
+      contextMaxTokens = contextMaxTokens?.takeIf { it > 0 },
+      maxOutputTokens = maxOutputTokens.takeIf { it > 0 } ?: DefaultMaxOutputTokens
+    )
+}
+
+@Serializable
+data class ModelRuntimeSettingsCollection(
+  val items: List<ModelRuntimeSettings> = emptyList()
+)
+
+fun modelSettingsStorageKey(baseUrl: String, userId: String): String {
+  val digest = MessageDigest.getInstance("SHA-256")
+    .digest("${baseUrl.trim()}|$userId".toByteArray(Charsets.UTF_8))
+    .joinToString("") { "%02x".format(it) }
+  return "${SecurePrefs.Keys.ModelRuntimeSettings}:$digest"
+}
+
+fun runtimeSettingsForVisibleOpenAiModels(
+  models: List<VisibleModel>,
+  saved: Map<String, ModelRuntimeSettings>
+): Map<String, ModelRuntimeSettings> =
+  models
+    .filter { it.supportsOpenAi }
+    .associate { model ->
+      val settings = saved[model.alias]?.normalized(model.alias) ?: ModelRuntimeSettings(model.alias)
+      model.alias to settings
+    }
+
+fun defaultOpenAiSettingsModelAlias(
+  models: List<VisibleModel>,
+  defaultModelAlias: String?
+): String? {
+  val openAiModels = models.filter { it.supportsOpenAi }
+  return defaultModelAlias
+    ?.takeIf { alias -> openAiModels.any { it.alias == alias } }
+    ?: openAiModels.firstOrNull()?.alias
 }
 
 @Serializable
@@ -137,9 +205,23 @@ data class ChatMessage(
   val content: String,
   val modelAlias: String?,
   val protocol: GatewayProtocol?,
+  val requestType: OpenAiRequestType? = null,
   val createdAt: Long,
   val attachments: List<StoredAttachment> = emptyList()
 )
+
+data class AssistantReply(
+  val text: String,
+  val generatedImages: List<GeneratedImage> = emptyList()
+)
+
+data class GeneratedImage(
+  val name: String,
+  val mimeType: String,
+  val bytes: ByteArray
+) {
+  val sizeBytes: Int get() = bytes.size
+}
 
 data class StoredAttachment(
   val id: String,
@@ -195,6 +277,7 @@ fun mapApiError(code: String, fallback: String): String =
     "model_not_routable" -> "当前账号无权使用该模型，或模型暂不可路由。"
     "api_rate_limited" -> "请求过于频繁，请稍后再试。"
     "proxy_concurrency_limited" -> "服务端并发已满，请稍后再试。"
+    "responses_not_supported", "endpoint_not_supported_for_provider_protocol" -> "当前模型或上游不支持 response 请求，请到设置中切回 chat 后重试。"
     "request_failed" -> fallback
     else -> fallback.ifBlank { code }
   }

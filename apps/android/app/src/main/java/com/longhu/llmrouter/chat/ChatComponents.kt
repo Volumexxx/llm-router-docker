@@ -1,5 +1,6 @@
 package com.longhu.llmrouter.chat
 
+import android.graphics.BitmapFactory
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -14,6 +15,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
@@ -40,16 +42,19 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -72,7 +77,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -84,8 +91,10 @@ fun ChatTopBar(
   onMenuClick: () -> Unit,
   onShowModels: () -> Unit,
   onNewConversation: () -> Unit,
+  onRequestRename: () -> Unit,
   onRequestDelete: () -> Unit,
   onRefreshModels: () -> Unit,
+  onOpenSettings: () -> Unit,
   onLogout: () -> Unit
 ) {
   var expanded by remember { mutableStateOf(false) }
@@ -131,12 +140,30 @@ fun ChatTopBar(
         }
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
           DropdownMenuItem(
+            text = { Text("设置") },
+            leadingIcon = { Icon(Icons.Filled.Settings, contentDescription = null) },
+            enabled = !state.busy,
+            onClick = {
+              expanded = false
+              onOpenSettings()
+            }
+          )
+          DropdownMenuItem(
             text = { Text("刷新模型") },
             leadingIcon = { Icon(Icons.Filled.Refresh, contentDescription = null) },
             enabled = !state.busy,
             onClick = {
               expanded = false
               onRefreshModels()
+            }
+          )
+          DropdownMenuItem(
+            text = { Text("重命名当前对话") },
+            leadingIcon = { Icon(Icons.Filled.Edit, contentDescription = null) },
+            enabled = state.selectedConversationId != null && !state.busy,
+            onClick = {
+              expanded = false
+              onRequestRename()
             }
           )
           DropdownMenuItem(
@@ -202,8 +229,10 @@ fun ConversationPanel(
   state: ChatUiState,
   onSelect: (String) -> Unit,
   onNew: () -> Unit,
+  onRequestRename: (String) -> Unit,
   onRequestDelete: (String) -> Unit,
   onRefreshModels: () -> Unit,
+  onOpenSettings: () -> Unit,
   onLogout: () -> Unit,
   modifier: Modifier = Modifier
 ) {
@@ -271,10 +300,22 @@ fun ConversationPanel(
         ConversationRow(
           conversation = conversation,
           selected = conversation.id == state.selectedConversationId,
+          actionsEnabled = !state.busy,
           onSelect = { onSelect(conversation.id) },
+          onRename = { onRequestRename(conversation.id) },
           onDelete = { onRequestDelete(conversation.id) }
         )
       }
+    }
+
+    OutlinedButton(
+      onClick = onOpenSettings,
+      enabled = !state.busy,
+      shape = RoundedCornerShape(8.dp),
+      modifier = Modifier.fillMaxWidth()
+    ) {
+      Icon(Icons.Filled.Settings, contentDescription = null)
+      Text("设置", modifier = Modifier.padding(start = 4.dp))
     }
 
     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -304,9 +345,12 @@ fun ConversationPanel(
 private fun ConversationRow(
   conversation: Conversation,
   selected: Boolean,
+  actionsEnabled: Boolean,
   onSelect: () -> Unit,
+  onRename: () -> Unit,
   onDelete: () -> Unit
 ) {
+  var expanded by remember { mutableStateOf(false) }
   Surface(
     modifier = Modifier
       .fillMaxWidth()
@@ -336,28 +380,57 @@ private fun ConversationRow(
           overflow = TextOverflow.Ellipsis
         )
       }
-      IconButton(onClick = onDelete, modifier = Modifier.size(36.dp)) {
-        Icon(
-          Icons.Filled.Delete,
-          contentDescription = "删除会话",
-          tint = AppColors.MutedText,
-          modifier = Modifier.size(18.dp)
-        )
+      Box {
+        IconButton(
+          onClick = { expanded = true },
+          enabled = actionsEnabled,
+          modifier = Modifier.size(36.dp)
+        ) {
+          Icon(
+            Icons.Filled.MoreVert,
+            contentDescription = "会话操作",
+            tint = AppColors.MutedText,
+            modifier = Modifier.size(18.dp)
+          )
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+          DropdownMenuItem(
+            text = { Text("重命名") },
+            leadingIcon = { Icon(Icons.Filled.Edit, contentDescription = null) },
+            onClick = {
+              expanded = false
+              onRename()
+            }
+          )
+          DropdownMenuItem(
+            text = { Text("删除") },
+            leadingIcon = { Icon(Icons.Filled.Delete, contentDescription = null) },
+            onClick = {
+              expanded = false
+              onDelete()
+            }
+          )
+        }
       }
     }
   }
 }
 
 @Composable
-fun MessageList(state: ChatUiState, modifier: Modifier = Modifier) {
+fun MessageList(
+  state: ChatUiState,
+  onLoadAttachmentBytes: (StoredAttachment) -> ByteArray?,
+  modifier: Modifier = Modifier
+) {
   val listState = rememberLazyListState()
-  LaunchedEffect(state.messages.size) {
-    if (state.messages.isNotEmpty()) {
-      listState.animateScrollToItem(state.messages.lastIndex)
+  LaunchedEffect(state.messages.size, state.sendingMessage) {
+    val targetIndex = state.messages.size + if (state.sendingMessage) 1 else 0
+    if (targetIndex > 0) {
+      listState.animateScrollToItem(targetIndex)
     }
   }
 
-  if (state.messages.isEmpty()) {
+  if (state.messages.isEmpty() && !state.sendingMessage) {
     EmptyConversation(modifier = modifier)
     return
   }
@@ -371,7 +444,12 @@ fun MessageList(state: ChatUiState, modifier: Modifier = Modifier) {
   ) {
     item { Spacer(modifier = Modifier.height(2.dp)) }
     items(state.messages, key = { it.id }) { message ->
-      MessageBubble(message)
+      MessageBubble(message, onLoadAttachmentBytes)
+    }
+    if (state.sendingMessage) {
+      item(key = "assistant-waiting") {
+        AssistantWaitingBubble()
+      }
     }
     item { Spacer(modifier = Modifier.height(12.dp)) }
   }
@@ -411,7 +489,10 @@ private fun EmptyConversation(modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun MessageBubble(message: ChatMessage) {
+private fun MessageBubble(
+  message: ChatMessage,
+  onLoadAttachmentBytes: (StoredAttachment) -> ByteArray?
+) {
   val isUser = message.role == MessageRole.User
   Box(modifier = Modifier.fillMaxWidth()) {
     Surface(
@@ -434,22 +515,166 @@ private fun MessageBubble(message: ChatMessage) {
           style = MaterialTheme.typography.labelMedium,
           fontWeight = FontWeight.SemiBold
         )
-        SelectionContainer {
+        if (message.content.isNotBlank()) {
+          SelectionContainer {
+            Text(
+              message.content,
+              color = if (isUser) Color.White else AppColors.Text,
+              style = MaterialTheme.typography.bodyLarge
+            )
+          }
+        }
+        StoredAttachmentPreview(
+          attachments = message.attachments,
+          isUser = isUser,
+          onLoadAttachmentBytes = onLoadAttachmentBytes
+        )
+        if (message.content.isBlank() && message.attachments.isEmpty()) {
           Text(
-            message.content,
-            color = if (isUser) Color.White else AppColors.Text,
+            "（空响应）",
+            color = if (isUser) Color.White else AppColors.MutedText,
             style = MaterialTheme.typography.bodyLarge
           )
         }
         message.modelAlias?.let { model ->
           Text(
-            "$model · ${message.protocol?.wireName ?: "-"}",
+            "$model · ${messageRequestLabel(message)}",
             color = if (isUser) Color.White.copy(alpha = 0.76f) else AppColors.MutedText,
             style = MaterialTheme.typography.bodySmall,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
           )
         }
+      }
+    }
+  }
+}
+
+@Composable
+private fun StoredAttachmentPreview(
+  attachments: List<StoredAttachment>,
+  isUser: Boolean,
+  onLoadAttachmentBytes: (StoredAttachment) -> ByteArray?
+) {
+  if (attachments.isEmpty()) {
+    return
+  }
+  Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    attachments.forEach { attachment ->
+      when (attachment.type) {
+        AttachmentType.Image -> StoredImageAttachment(
+          attachment = attachment,
+          isUser = isUser,
+          onLoadAttachmentBytes = onLoadAttachmentBytes
+        )
+        AttachmentType.Text -> StoredTextAttachment(attachment, isUser)
+      }
+    }
+  }
+}
+
+@Composable
+private fun StoredImageAttachment(
+  attachment: StoredAttachment,
+  isUser: Boolean,
+  onLoadAttachmentBytes: (StoredAttachment) -> ByteArray?
+) {
+  val imageBitmap = remember(attachment.id, attachment.encryptedPath) {
+    val bytes = onLoadAttachmentBytes(attachment) ?: return@remember null
+    BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap()
+  }
+  if (imageBitmap == null) {
+    StoredTextAttachment(attachment, isUser)
+    return
+  }
+  Surface(
+    shape = RoundedCornerShape(8.dp),
+    color = if (isUser) Color.White.copy(alpha = 0.12f) else AppColors.Panel,
+    border = BorderStroke(1.dp, if (isUser) Color.White.copy(alpha = 0.22f) else AppColors.Border)
+  ) {
+    androidx.compose.foundation.Image(
+      bitmap = imageBitmap,
+      contentDescription = attachment.name,
+      contentScale = ContentScale.Fit,
+      modifier = Modifier
+        .fillMaxWidth()
+        .heightIn(min = 120.dp, max = 280.dp)
+        .padding(4.dp)
+        .clip(RoundedCornerShape(6.dp))
+        .background(if (isUser) Color.Transparent else Color.White)
+    )
+  }
+}
+
+@Composable
+private fun StoredTextAttachment(attachment: StoredAttachment, isUser: Boolean) {
+  Surface(
+    shape = RoundedCornerShape(8.dp),
+    color = if (isUser) Color.White.copy(alpha = 0.12f) else AppColors.Panel,
+    border = BorderStroke(1.dp, if (isUser) Color.White.copy(alpha = 0.22f) else AppColors.Border)
+  ) {
+    Row(
+      modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+      verticalAlignment = Alignment.CenterVertically
+    ) {
+      Icon(
+        if (attachment.type == AttachmentType.Image) Icons.Filled.Image else Icons.AutoMirrored.Filled.InsertDriveFile,
+        contentDescription = null,
+        tint = if (isUser) Color.White.copy(alpha = 0.82f) else AppColors.MutedText,
+        modifier = Modifier.size(18.dp)
+      )
+      Column(
+        modifier = Modifier
+          .padding(start = 6.dp)
+          .weight(1f)
+      ) {
+        Text(
+          attachment.name,
+          color = if (isUser) Color.White else AppColors.Text,
+          style = MaterialTheme.typography.bodySmall,
+          maxLines = 1,
+          overflow = TextOverflow.Ellipsis
+        )
+        Text(
+          attachment.mimeType,
+          color = if (isUser) Color.White.copy(alpha = 0.72f) else AppColors.MutedText,
+          style = MaterialTheme.typography.labelSmall,
+          maxLines = 1,
+          overflow = TextOverflow.Ellipsis
+        )
+      }
+    }
+  }
+}
+
+@Composable
+private fun AssistantWaitingBubble() {
+  Box(modifier = Modifier.fillMaxWidth()) {
+    Surface(
+      modifier = Modifier
+        .align(Alignment.CenterStart)
+        .fillMaxWidth(0.72f)
+        .widthIn(max = 520.dp),
+      shape = RoundedCornerShape(8.dp),
+      color = AppColors.AssistantBubble,
+      border = BorderStroke(1.dp, AppColors.Border),
+      shadowElevation = 1.dp
+    ) {
+      Row(
+        modifier = Modifier.padding(12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp)
+      ) {
+        CircularProgressIndicator(
+          modifier = Modifier.size(18.dp),
+          strokeWidth = 2.dp,
+          color = AppColors.Primary
+        )
+        Text(
+          "正在思考…",
+          color = AppColors.MutedText,
+          style = MaterialTheme.typography.bodyMedium
+        )
       }
     }
   }
@@ -718,6 +943,43 @@ fun DeleteConversationDialog(onDismiss: () -> Unit, onConfirm: () -> Unit) {
 }
 
 @Composable
+fun RenameConversationDialog(
+  initialTitle: String,
+  onDismiss: () -> Unit,
+  onConfirm: (String) -> Unit
+) {
+  var title by remember(initialTitle) { mutableStateOf(initialTitle) }
+  val normalized = title.trim()
+  AlertDialog(
+    onDismissRequest = onDismiss,
+    title = { Text("重命名对话") },
+    text = {
+      OutlinedTextField(
+        value = title,
+        onValueChange = { title = it.take(80) },
+        label = { Text("对话标题") },
+        singleLine = true,
+        shape = RoundedCornerShape(8.dp),
+        modifier = Modifier.fillMaxWidth()
+      )
+    },
+    confirmButton = {
+      TextButton(
+        onClick = { onConfirm(normalized) },
+        enabled = normalized.isNotBlank()
+      ) {
+        Text("保存")
+      }
+    },
+    dismissButton = {
+      TextButton(onClick = onDismiss) {
+        Text("取消")
+      }
+    }
+  )
+}
+
+@Composable
 fun FeedbackBanner(state: ChatUiState, modifier: Modifier = Modifier) {
   state.error?.let {
     StatusBanner(it, isError = true, modifier = modifier)
@@ -753,3 +1015,10 @@ private fun selectedModelLabel(state: ChatUiState): String {
   val model = state.models.firstOrNull { it.alias == alias }
   return model?.displayName?.ifBlank { model.alias } ?: alias
 }
+
+private fun messageRequestLabel(message: ChatMessage): String =
+  when (message.protocol) {
+    GatewayProtocol.OpenAi -> "openai/${message.requestType?.wireName ?: OpenAiRequestType.Chat.wireName}"
+    GatewayProtocol.Anthropic -> "anthropic/messages"
+    null -> "-"
+  }

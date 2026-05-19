@@ -72,6 +72,13 @@ class SqlCipherChatStore(
     return conversation
   }
 
+  fun renameConversation(conversationId: String, title: String) = synchronized(this) {
+    db.execSQL(
+      "UPDATE conversations SET title = ?, updated_at = ? WHERE id = ?",
+      arrayOf<Any?>(title, System.currentTimeMillis(), conversationId)
+    )
+  }
+
   fun deleteConversation(conversationId: String) = synchronized(this) {
     db.execSQL("DELETE FROM attachments WHERE message_id IN (SELECT id FROM messages WHERE conversation_id = ?)", arrayOf<Any?>(conversationId))
     db.execSQL("DELETE FROM messages WHERE conversation_id = ?", arrayOf<Any?>(conversationId))
@@ -82,7 +89,7 @@ class SqlCipherChatStore(
     val messages = mutableListOf<ChatMessage>()
     val cursor = db.rawQuery(
       """
-        SELECT id, conversation_id, role, content, model_alias, protocol, created_at
+        SELECT id, conversation_id, role, content, model_alias, protocol, request_type, created_at
         FROM messages
         WHERE conversation_id = ?
         ORDER BY created_at ASC
@@ -99,7 +106,8 @@ class SqlCipherChatStore(
           content = it.getString(3),
           modelAlias = it.getNullableString(4),
           protocol = it.getNullableString(5)?.let(GatewayProtocol.Companion::fromWire),
-          createdAt = it.getLong(6),
+          requestType = it.getNullableString(6)?.let(OpenAiRequestType.Companion::fromWire),
+          createdAt = it.getLong(7),
           attachments = listAttachments(messageId)
         )
       }
@@ -110,8 +118,8 @@ class SqlCipherChatStore(
   fun addMessage(message: ChatMessage) = synchronized(this) {
     db.execSQL(
       """
-        INSERT INTO messages (id, conversation_id, role, content, model_alias, protocol, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO messages (id, conversation_id, role, content, model_alias, protocol, request_type, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       """.trimIndent(),
       arrayOf<Any?>(
         message.id,
@@ -120,6 +128,7 @@ class SqlCipherChatStore(
         message.content,
         message.modelAlias,
         message.protocol?.wireName,
+        message.requestType?.wireName,
         message.createdAt
       )
     )
@@ -200,10 +209,12 @@ class SqlCipherChatStore(
           content TEXT NOT NULL,
           model_alias TEXT,
           protocol TEXT,
+          request_type TEXT,
           created_at INTEGER NOT NULL
         )
       """.trimIndent()
     )
+    ensureColumn(database, "messages", "request_type", "TEXT")
     database.execSQL(
       """
         CREATE TABLE IF NOT EXISTS attachments (
@@ -220,6 +231,23 @@ class SqlCipherChatStore(
     )
     database.execSQL("CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id, created_at)")
     database.execSQL("CREATE INDEX IF NOT EXISTS idx_attachments_message ON attachments(message_id, created_at)")
+  }
+
+  private fun ensureColumn(database: SQLiteDatabase, table: String, column: String, declaration: String) {
+    val cursor = database.rawQuery("PRAGMA table_info($table)", emptyArray<String>())
+    val exists = cursor.use {
+      var found = false
+      while (it.moveToNext()) {
+        if (it.getString(1) == column) {
+          found = true
+          break
+        }
+      }
+      found
+    }
+    if (!exists) {
+      database.execSQL("ALTER TABLE $table ADD COLUMN $column $declaration")
+    }
   }
 
   private fun getOrCreatePassphrase(): String {

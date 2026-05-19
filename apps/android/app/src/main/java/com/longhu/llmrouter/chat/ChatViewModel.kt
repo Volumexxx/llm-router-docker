@@ -17,11 +17,13 @@ import java.util.UUID
 data class ChatUiState(
   val loading: Boolean = true,
   val busy: Boolean = false,
+  val sendingMessage: Boolean = false,
   val baseUrl: String = "",
   val username: String = "",
   val password: String = "",
   val user: ConsoleUser? = null,
   val models: List<VisibleModel> = emptyList(),
+  val modelSettings: Map<String, ModelRuntimeSettings> = emptyMap(),
   val defaultModelAlias: String? = null,
   val selectedModelAlias: String? = null,
   val conversations: List<Conversation> = emptyList(),
@@ -111,6 +113,40 @@ class ChatViewModel(
     state = state.copy(selectedModelAlias = alias)
   }
 
+  fun setModelRequestType(alias: String, requestType: OpenAiRequestType) {
+    updateModelSettings(alias) { settings ->
+      settings.copy(requestType = requestType)
+    }
+  }
+
+  fun updateContextMaxTokens(alias: String, rawValue: String) {
+    val value = rawValue.trim()
+    if (value.isBlank()) {
+      updateModelSettings(alias) { settings -> settings.copy(contextMaxTokens = null) }
+      return
+    }
+    val parsed = value.toIntOrNull()
+    if (parsed == null || parsed <= 0) {
+      state = state.copy(error = "上下文最大 token 数必须为空或正整数。", notice = null)
+      return
+    }
+    updateModelSettings(alias) { settings -> settings.copy(contextMaxTokens = parsed) }
+  }
+
+  fun updateMaxOutputTokens(alias: String, rawValue: String) {
+    val value = rawValue.trim()
+    if (value.isBlank()) {
+      updateModelSettings(alias) { settings -> settings.copy(maxOutputTokens = DefaultMaxOutputTokens) }
+      return
+    }
+    val parsed = value.toIntOrNull()
+    if (parsed == null || parsed <= 0) {
+      state = state.copy(error = "最大输出 token 数必须为正整数。", notice = null)
+      return
+    }
+    updateModelSettings(alias) { settings -> settings.copy(maxOutputTokens = parsed) }
+  }
+
   fun newConversation() {
     val model = state.selectedModelAlias ?: state.defaultModelAlias
     val conversation = repository.createConversation("新对话", model)
@@ -145,6 +181,25 @@ class ChatViewModel(
       selectedConversationId = next?.id,
       messages = next?.let { repository.messages(it.id) }.orEmpty(),
       notice = "对话已删除。"
+    )
+  }
+
+  fun renameCurrentConversation(title: String) {
+    val conversationId = state.selectedConversationId ?: return
+    renameConversation(conversationId, title)
+  }
+
+  fun renameConversation(conversationId: String, title: String) {
+    val normalized = title.trim().take(80)
+    if (normalized.isBlank()) {
+      state = state.copy(error = "对话标题不能为空。", notice = null)
+      return
+    }
+    repository.renameConversation(conversationId, normalized)
+    state = state.copy(
+      conversations = repository.conversations(),
+      notice = "对话已重命名。",
+      error = null
     )
   }
 
@@ -187,6 +242,9 @@ class ChatViewModel(
     state = state.copy(pendingAttachments = state.pendingAttachments.filterNot { it.id == id })
   }
 
+  fun loadAttachmentBytes(attachment: StoredAttachment): ByteArray? =
+    runCatching { attachmentStore.readBytes(attachment) }.getOrNull()
+
   fun sendMessage() {
     val text = state.input.trim()
     val attachments = state.pendingAttachments
@@ -196,6 +254,16 @@ class ChatViewModel(
     }
 
     val model = state.models.firstOrNull { it.alias == state.selectedModelAlias }
+    val runtimeSettings = model?.let {
+      if (it.supportsOpenAi) {
+        state.modelSettings[it.alias] ?: repository.modelRuntimeSettings(state.user, it)
+      } else {
+        ModelRuntimeSettings(it.alias)
+      }
+    }
+    val requestType = model?.let {
+      if (it.preferredProtocol == GatewayProtocol.OpenAi) runtimeSettings?.requestType else null
+    }
     if (model == null) {
       state = state.copy(error = "请先选择可用模型。")
       return
@@ -216,6 +284,7 @@ class ChatViewModel(
         content = displayContent(text, attachments),
         modelAlias = model.alias,
         protocol = model.preferredProtocol,
+        requestType = requestType,
         createdAt = now,
         attachments = storedAttachments
       )
@@ -224,23 +293,31 @@ class ChatViewModel(
       state = state.copy(
         input = "",
         pendingAttachments = emptyList(),
-        messages = repository.messages(conversation.id)
+        messages = repository.messages(conversation.id),
+        sendingMessage = true
       )
 
-      val reply = repository.send(model, history, text, attachments)
+      val reply = repository.send(model, requireNotNull(runtimeSettings), history, text, attachments)
+      val assistantMessageId = UUID.randomUUID().toString()
+      val generatedAttachments = reply.generatedImages
+        .map { attachmentStore.createGeneratedImage(it) }
+        .map { attachmentStore.persist(assistantMessageId, it) }
       repository.addMessage(
         ChatMessage(
-          id = UUID.randomUUID().toString(),
+          id = assistantMessageId,
           conversationId = conversation.id,
           role = MessageRole.Assistant,
-          content = reply.ifBlank { "（空响应）" },
+          content = assistantContent(reply),
           modelAlias = model.alias,
           protocol = model.preferredProtocol,
-          createdAt = System.currentTimeMillis()
+          requestType = requestType,
+          createdAt = System.currentTimeMillis(),
+          attachments = generatedAttachments
         )
       )
       state = state.copy(
         busy = false,
+        sendingMessage = false,
         conversations = repository.conversations(),
         messages = repository.messages(conversation.id),
         selectedConversationId = conversation.id,
@@ -300,6 +377,7 @@ class ChatViewModel(
       ?: models.firstOrNull()?.alias
     state = state.copy(
       models = models,
+      modelSettings = repository.modelRuntimeSettings(state.user, models),
       defaultModelAlias = validDefault,
       selectedModelAlias = selected,
       notice = if (savedDefault != null && validDefault == null) {
@@ -307,6 +385,22 @@ class ChatViewModel(
       } else {
         notice
       }
+    )
+  }
+
+  private fun updateModelSettings(
+    alias: String,
+    transform: (ModelRuntimeSettings) -> ModelRuntimeSettings
+  ) {
+    val user = state.user ?: return
+    val model = state.models.firstOrNull { it.alias == alias && it.supportsOpenAi } ?: return
+    val current = state.modelSettings[alias] ?: repository.modelRuntimeSettings(user, model)
+    val next = transform(current).normalized(alias)
+    repository.saveModelRuntimeSettings(user, next)
+    state = state.copy(
+      modelSettings = state.modelSettings + (alias to next),
+      error = null,
+      notice = null
     )
   }
 
@@ -353,6 +447,13 @@ class ChatViewModel(
     return "$text\n\n附件：\n$summary".trim()
   }
 
+  private fun assistantContent(reply: AssistantReply): String =
+    when {
+      reply.text.isNotBlank() -> reply.text
+      reply.generatedImages.isNotEmpty() -> "已生成图片"
+      else -> "（空响应）"
+    }
+
   private fun runBusy(block: suspend () -> Unit) {
     state = state.copy(busy = true, error = null, notice = null)
     viewModelScope.launch {
@@ -364,6 +465,7 @@ class ChatViewModel(
       } catch (error: Throwable) {
         state = state.copy(
           busy = false,
+          sendingMessage = false,
           error = error.toUserMessage()
         )
       }

@@ -53,6 +53,22 @@ class AttachmentStore(
     )
   }
 
+  fun createGeneratedImage(image: GeneratedImage): PendingAttachment {
+    val encoded = Base64.encodeToString(image.bytes, Base64.NO_WRAP)
+    return PendingAttachment(
+      id = UUID.randomUUID().toString(),
+      type = AttachmentType.Image,
+      name = image.name.ifBlank { "generated-image.${image.mimeType.imageExtension()}" },
+      mimeType = image.mimeType.ifBlank { "image/png" },
+      bytes = image.bytes,
+      previewText = null,
+      dataUrl = "data:${image.mimeType.ifBlank { "image/png" }};base64,$encoded"
+    )
+  }
+
+  fun readBytes(attachment: StoredAttachment): ByteArray =
+    cryptoManager.decryptBytes(File(attachment.encryptedPath).readText(Charsets.UTF_8))
+
   private fun createImage(uri: Uri, mimeType: String): PendingAttachment {
     val bitmap = decodeBitmap(uri)
     val scaled = scaleBitmap(bitmap, 1600)
@@ -142,4 +158,11 @@ class AttachmentStore(
     }
     return buffer.toByteArray()
   }
+
+  private fun String.imageExtension(): String =
+    when (lowercase()) {
+      "image/jpeg", "image/jpg" -> "jpg"
+      "image/webp" -> "webp"
+      else -> "png"
+    }
 }

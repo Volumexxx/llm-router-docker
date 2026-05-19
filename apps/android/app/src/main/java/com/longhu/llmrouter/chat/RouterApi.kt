@@ -7,6 +7,7 @@ import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
@@ -20,6 +21,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.IOException
+import java.util.Base64 as JavaBase64
 import java.util.concurrent.TimeUnit
 
 class RouterApi(private val cookieJar: RouterCookieJar) {
@@ -90,13 +92,16 @@ class RouterApi(private val cookieJar: RouterCookieJar) {
     baseUrl: String,
     apiKey: String,
     model: VisibleModel,
+    settings: ModelRuntimeSettings,
     history: List<ChatMessage>,
     userContent: String,
     attachments: List<PendingAttachment>
-  ): String {
+  ): AssistantReply {
     val protocol = model.preferredProtocol
-    return if (protocol == GatewayProtocol.OpenAi) {
-      postOpenAiChat(baseUrl, apiKey, model.alias, history, userContent, attachments)
+    return if (protocol == GatewayProtocol.OpenAi && settings.requestType == OpenAiRequestType.Response) {
+      postOpenAiResponses(baseUrl, apiKey, model.alias, settings.maxOutputTokens, history, userContent, attachments)
+    } else if (protocol == GatewayProtocol.OpenAi) {
+      postOpenAiChat(baseUrl, apiKey, model.alias, settings.maxOutputTokens, history, userContent, attachments)
     } else {
       postAnthropicMessages(baseUrl, apiKey, model.alias, history, userContent, attachments)
     }
@@ -106,49 +111,36 @@ class RouterApi(private val cookieJar: RouterCookieJar) {
     baseUrl: String,
     apiKey: String,
     modelAlias: String,
+    maxOutputTokens: Int,
     history: List<ChatMessage>,
     userContent: String,
     attachments: List<PendingAttachment>
-  ): String {
-    val messages = buildJsonArray {
-      history.forEach { message ->
-        add(
-          buildJsonObject {
-            put("role", JsonPrimitive(message.role.wireName))
-            put("content", JsonPrimitive(message.content))
-          }
-        )
-      }
-      add(
-        buildJsonObject {
-          put("role", JsonPrimitive("user"))
-          put("content", openAiContent(userContent, attachments))
-        }
-      )
-    }
-
-    val payload = buildJsonObject {
-      put("model", JsonPrimitive(modelAlias))
-      put("stream", JsonPrimitive(false))
-      put("temperature", JsonPrimitive(0.7))
-      put("max_tokens", JsonPrimitive(2048))
-      put("messages", messages)
-    }.toString()
+  ): AssistantReply {
+    val payload = buildOpenAiChatPayload(modelAlias, maxOutputTokens, history, userContent, attachments)
 
     val response = postJsonObject(normalizeBaseUrl(baseUrl), "/v1/chat/completions", payload, apiKey)
-    val choices = response["choices"] as? JsonArray ?: return ""
-    val message = choices.firstOrNull()?.jsonObject?.get("message")?.jsonObject ?: return ""
-    val content = message["content"] ?: return ""
-    if (content is JsonPrimitive) {
-      return content.contentOrNull.orEmpty()
-    }
-    if (content is JsonArray) {
-      return content.mapNotNull { part ->
-        val item = part.jsonObject
-        item["text"]?.jsonPrimitive?.contentOrNull
-      }.joinToString("")
-    }
-    return ""
+    return parseOpenAiChatReply(response)
+  }
+
+  private suspend fun postOpenAiResponses(
+    baseUrl: String,
+    apiKey: String,
+    modelAlias: String,
+    maxOutputTokens: Int,
+    history: List<ChatMessage>,
+    userContent: String,
+    attachments: List<PendingAttachment>
+  ): AssistantReply {
+    val payload = buildOpenAiResponsesPayload(
+      modelAlias,
+      maxOutputTokens,
+      history,
+      userContent,
+      attachments
+    )
+
+    val response = postJsonObject(normalizeBaseUrl(baseUrl), "/v1/responses", payload, apiKey)
+    return parseOpenAiResponsesReply(response)
   }
 
   private suspend fun postAnthropicMessages(
@@ -158,7 +150,7 @@ class RouterApi(private val cookieJar: RouterCookieJar) {
     history: List<ChatMessage>,
     userContent: String,
     attachments: List<PendingAttachment>
-  ): String {
+  ): AssistantReply {
     val messages = buildJsonArray {
       history.filter { it.role != MessageRole.System }.forEach { message ->
         add(
@@ -189,8 +181,8 @@ class RouterApi(private val cookieJar: RouterCookieJar) {
       apiKey,
       anthropic = true
     )
-    val content = response["content"] as? JsonArray ?: return ""
-    return content.mapNotNull { part ->
+    val content = response["content"] as? JsonArray ?: return AssistantReply("")
+    val text = content.mapNotNull { part ->
       val item = part.jsonObject
       if (item["type"]?.jsonPrimitive?.contentOrNull == "text") {
         item["text"]?.jsonPrimitive?.contentOrNull
@@ -198,6 +190,7 @@ class RouterApi(private val cookieJar: RouterCookieJar) {
         null
       }
     }.joinToString("")
+    return AssistantReply(text)
   }
 
   private fun openAiContent(text: String, attachments: List<PendingAttachment>) =
@@ -371,3 +364,290 @@ class RouterApi(private val cookieJar: RouterCookieJar) {
     }
   }
 }
+
+internal fun buildOpenAiResponsesPayload(
+  modelAlias: String,
+  maxOutputTokens: Int,
+  history: List<ChatMessage>,
+  userContent: String,
+  attachments: List<PendingAttachment>
+): String =
+  buildJsonObject {
+    put("model", JsonPrimitive(modelAlias))
+    put("stream", JsonPrimitive(false))
+    put("max_output_tokens", JsonPrimitive(maxOutputTokens))
+    put(
+      "tools",
+      buildJsonArray {
+        add(
+          buildJsonObject {
+            put("type", JsonPrimitive("image_generation"))
+          }
+        )
+      }
+    )
+    put(
+      "input",
+      buildJsonArray {
+        history.forEach { message ->
+          add(
+            buildJsonObject {
+              put(
+                "role",
+                JsonPrimitive(
+                  when (message.role) {
+                    MessageRole.Assistant -> "assistant"
+                    MessageRole.System -> "system"
+                    MessageRole.User -> "user"
+                  }
+                )
+              )
+              put(
+                "content",
+                responseTextContent(
+                  text = message.content,
+                  textType = if (message.role == MessageRole.Assistant) "output_text" else "input_text"
+                )
+              )
+            }
+          )
+        }
+        add(
+          buildJsonObject {
+            put("role", JsonPrimitive("user"))
+            put("content", responseUserContent(userContent, attachments))
+          }
+        )
+      }
+    )
+  }.toString()
+
+internal fun buildOpenAiChatPayload(
+  modelAlias: String,
+  maxOutputTokens: Int,
+  history: List<ChatMessage>,
+  userContent: String,
+  attachments: List<PendingAttachment>
+): String {
+  val messages = buildJsonArray {
+    history.forEach { message ->
+      add(
+        buildJsonObject {
+          put("role", JsonPrimitive(message.role.wireName))
+          put("content", JsonPrimitive(message.content))
+        }
+      )
+    }
+    add(
+      buildJsonObject {
+        put("role", JsonPrimitive("user"))
+        put("content", openAiChatContent(userContent, attachments))
+      }
+    )
+  }
+
+  return buildJsonObject {
+    put("model", JsonPrimitive(modelAlias))
+    put("stream", JsonPrimitive(false))
+    put("temperature", JsonPrimitive(0.7))
+    put("max_tokens", JsonPrimitive(maxOutputTokens))
+    put("messages", messages)
+  }.toString()
+}
+
+internal fun parseOpenAiChatReply(response: JsonObject): AssistantReply {
+  val choices = response["choices"] as? JsonArray ?: return AssistantReply("")
+  val message = choices.firstOrNull()?.asObject()?.get("message")?.asObject() ?: return AssistantReply("")
+  return parseOpenAiMessageContent(message["content"])
+}
+
+internal fun parseOpenAiResponsesText(response: JsonObject): String =
+  parseOpenAiResponsesReply(response).text
+
+internal fun parseOpenAiResponsesReply(response: JsonObject): AssistantReply {
+  val texts = mutableListOf<String>()
+  val images = mutableListOf<GeneratedImage>()
+
+  response["output_text"]?.asString()?.takeIf { it.isNotBlank() }?.let { texts += it }
+
+  val output = response["output"] as? JsonArray ?: return AssistantReply(texts.joinToString(""), images)
+  output.forEachIndexed { outputIndex, item ->
+    val record = item.asObject() ?: return@forEachIndexed
+    collectImage(record, "response-image-${outputIndex + 1}")?.let { images += it }
+
+    val content = record["content"] as? JsonArray ?: return@forEachIndexed
+    content.forEachIndexed { contentIndex, part ->
+      val block = part.asObject() ?: return@forEachIndexed
+      when (block["type"]?.asString()) {
+        "output_text", "text" -> block["text"]?.asString()?.let { texts += it }
+        "image_url", "output_image" -> {
+          collectImage(block, "response-image-${outputIndex + 1}-${contentIndex + 1}")?.let {
+            images += it
+          } ?: collectRemoteImageUrl(block)?.let { texts += "\n[图片链接] $it" }
+        }
+      }
+    }
+  }
+  return AssistantReply(texts.joinToString(""), images)
+}
+
+private fun parseOpenAiMessageContent(content: JsonElement?): AssistantReply {
+  if (content == null) {
+    return AssistantReply("")
+  }
+  content.asString()?.let {
+    return AssistantReply(it)
+  }
+
+  val blocks = content as? JsonArray ?: return AssistantReply("")
+  val texts = mutableListOf<String>()
+  val images = mutableListOf<GeneratedImage>()
+  blocks.forEachIndexed { index, part ->
+    val block = part.asObject() ?: return@forEachIndexed
+    when (block["type"]?.asString()) {
+      "text", "output_text" -> block["text"]?.asString()?.let { texts += it }
+      "image_url", "output_image" -> {
+        collectImage(block, "chat-image-${index + 1}")?.let {
+          images += it
+        } ?: collectRemoteImageUrl(block)?.let { texts += "\n[图片链接] $it" }
+      }
+      else -> {
+        block["text"]?.asString()?.let { texts += it }
+        collectImage(block, "chat-image-${index + 1}")?.let { images += it }
+      }
+    }
+  }
+  return AssistantReply(texts.joinToString(""), images)
+}
+
+private fun collectImage(record: JsonObject, fallbackName: String): GeneratedImage? {
+  val type = record["type"]?.asString()
+  val direct = listOf("result", "b64_json", "base64", "data", "image_base64")
+    .firstNotNullOfOrNull { key -> record[key]?.asString() }
+  if (!direct.isNullOrBlank()) {
+    return decodeGeneratedImage(direct, fallbackName, record["mime_type"]?.asString())
+  }
+
+  val imageUrl = record["image_url"]
+  val imageUrlValue = imageUrl?.asString()
+    ?: imageUrl?.asObject()?.get("url")?.asString()
+  if (!imageUrlValue.isNullOrBlank() && imageUrlValue.startsWith("data:")) {
+    return decodeGeneratedImage(imageUrlValue, fallbackName, record["mime_type"]?.asString())
+  }
+
+  if (type == "image_generation_call") {
+    record["result"]?.asString()?.let {
+      return decodeGeneratedImage(it, fallbackName, record["mime_type"]?.asString())
+    }
+  }
+  return null
+}
+
+private fun collectRemoteImageUrl(record: JsonObject): String? {
+  val direct = record["url"]?.asString()?.takeIf { it.startsWith("http://") || it.startsWith("https://") }
+  if (direct != null) {
+    return direct
+  }
+  val imageUrl = record["image_url"]
+  return imageUrl?.asString()?.takeIf { it.startsWith("http://") || it.startsWith("https://") }
+    ?: imageUrl?.asObject()?.get("url")?.asString()?.takeIf { it.startsWith("http://") || it.startsWith("https://") }
+}
+
+private fun decodeGeneratedImage(raw: String, fallbackName: String, explicitMimeType: String?): GeneratedImage? {
+  val trimmed = raw.trim()
+  val dataUrlMatch = Regex("^data:(image/[A-Za-z0-9.+-]+);base64,(.+)$").matchEntire(trimmed)
+  val mimeType = explicitMimeType
+    ?: dataUrlMatch?.groupValues?.getOrNull(1)
+    ?: "image/png"
+  val base64 = dataUrlMatch?.groupValues?.getOrNull(2) ?: trimmed
+  val bytes = runCatching { JavaBase64.getDecoder().decode(base64) }.getOrNull() ?: return null
+  return GeneratedImage(
+    name = "$fallbackName.${mimeType.generatedImageExtension()}",
+    mimeType = mimeType,
+    bytes = bytes
+  )
+}
+
+private fun String.generatedImageExtension(): String =
+  when (lowercase()) {
+    "image/jpeg", "image/jpg" -> "jpg"
+    "image/webp" -> "webp"
+    else -> "png"
+  }
+
+private fun JsonElement.asObject(): JsonObject? = this as? JsonObject
+
+private fun JsonElement.asString(): String? = (this as? JsonPrimitive)?.contentOrNull
+
+private fun responseTextContent(text: String, textType: String): JsonArray =
+  buildJsonArray {
+    add(
+      buildJsonObject {
+        put("type", JsonPrimitive(textType))
+        put("text", JsonPrimitive(text))
+      }
+    )
+  }
+
+private fun responseUserContent(text: String, attachments: List<PendingAttachment>): JsonArray =
+  buildJsonArray {
+    if (text.isNotBlank()) {
+      add(
+        buildJsonObject {
+          put("type", JsonPrimitive("input_text"))
+          put("text", JsonPrimitive(text))
+        }
+      )
+    }
+    attachments.forEach { attachment ->
+      when (attachment.type) {
+        AttachmentType.Text -> add(
+          buildJsonObject {
+            put("type", JsonPrimitive("input_text"))
+            put("text", JsonPrimitive(attachment.previewText.orEmpty()))
+          }
+        )
+        AttachmentType.Image -> add(
+          buildJsonObject {
+            put("type", JsonPrimitive("input_image"))
+            put("image_url", JsonPrimitive(attachment.dataUrl.orEmpty()))
+          }
+        )
+      }
+    }
+  }
+
+private fun openAiChatContent(text: String, attachments: List<PendingAttachment>): JsonElement =
+  if (attachments.isEmpty()) {
+    JsonPrimitive(text)
+  } else {
+    buildJsonArray {
+      add(
+        buildJsonObject {
+          put("type", JsonPrimitive("text"))
+          put("text", JsonPrimitive(text))
+        }
+      )
+      attachments.forEach { attachment ->
+        when (attachment.type) {
+          AttachmentType.Text -> add(
+            buildJsonObject {
+              put("type", JsonPrimitive("text"))
+              put("text", JsonPrimitive(attachment.previewText.orEmpty()))
+            }
+          )
+          AttachmentType.Image -> add(
+            buildJsonObject {
+              put("type", JsonPrimitive("image_url"))
+              put(
+                "image_url",
+                buildJsonObject {
+                  put("url", JsonPrimitive(attachment.dataUrl.orEmpty()))
+                }
+              )
+            }
+          )
+        }
+      }
+    }
+  }

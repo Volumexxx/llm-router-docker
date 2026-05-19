@@ -30,7 +30,7 @@ import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ChatScreen(state: ChatUiState, vm: ChatViewModel) {
+fun ChatScreen(state: ChatUiState, vm: ChatViewModel, onOpenSettings: () -> Unit) {
   val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.GetMultipleContents()) {
     vm.addAttachments(it)
   }
@@ -39,6 +39,7 @@ fun ChatScreen(state: ChatUiState, vm: ChatViewModel) {
   }
   var showModelSheet by remember { mutableStateOf(false) }
   var showDeleteDialog by remember { mutableStateOf(false) }
+  var renameConversationId by remember { mutableStateOf<String?>(null) }
   val pickImages = { imagePicker.launch("image/*") }
   val pickFiles = { filePicker.launch(arrayOf("text/*", "application/json", "application/xml")) }
 
@@ -52,7 +53,9 @@ fun ChatScreen(state: ChatUiState, vm: ChatViewModel) {
         state = state,
         vm = vm,
         onShowModels = { showModelSheet = true },
+        onRequestRename = { renameConversationId = it },
         onRequestDelete = { showDeleteDialog = true },
+        onOpenSettings = onOpenSettings,
         onPickImages = pickImages,
         onPickFiles = pickFiles
       )
@@ -61,7 +64,9 @@ fun ChatScreen(state: ChatUiState, vm: ChatViewModel) {
         state = state,
         vm = vm,
         onShowModels = { showModelSheet = true },
+        onRequestRename = { renameConversationId = it },
         onRequestDelete = { showDeleteDialog = true },
+        onOpenSettings = onOpenSettings,
         onPickImages = pickImages,
         onPickFiles = pickFiles
       )
@@ -89,6 +94,18 @@ fun ChatScreen(state: ChatUiState, vm: ChatViewModel) {
       }
     )
   }
+
+  val renameConversation = state.conversations.firstOrNull { it.id == renameConversationId }
+  if (renameConversation != null) {
+    RenameConversationDialog(
+      initialTitle = renameConversation.title,
+      onDismiss = { renameConversationId = null },
+      onConfirm = { title ->
+        renameConversationId = null
+        vm.renameConversation(renameConversation.id, title)
+      }
+    )
+  }
 }
 
 @Composable
@@ -96,7 +113,9 @@ private fun PhoneChatLayout(
   state: ChatUiState,
   vm: ChatViewModel,
   onShowModels: () -> Unit,
+  onRequestRename: (String) -> Unit,
   onRequestDelete: () -> Unit,
+  onOpenSettings: () -> Unit,
   onPickImages: () -> Unit,
   onPickFiles: () -> Unit
 ) {
@@ -121,6 +140,7 @@ private fun PhoneChatLayout(
             vm.newConversation()
             scope.launch { drawerState.close() }
           },
+          onRequestRename = onRequestRename,
           onRequestDelete = { conversationId ->
             if (conversationId != state.selectedConversationId) {
               vm.selectConversation(conversationId)
@@ -128,6 +148,7 @@ private fun PhoneChatLayout(
             onRequestDelete()
           },
           onRefreshModels = vm::refreshModels,
+          onOpenSettings = onOpenSettings,
           onLogout = vm::logout,
           modifier = Modifier.fillMaxSize()
         )
@@ -141,7 +162,9 @@ private fun PhoneChatLayout(
       onMenuClick = { scope.launch { drawerState.open() } },
       onShowModels = onShowModels,
       onNewConversation = vm::newConversation,
+      onRequestRename = { state.selectedConversationId?.let(onRequestRename) },
       onRequestDelete = onRequestDelete,
+      onOpenSettings = onOpenSettings,
       onPickImages = onPickImages,
       onPickFiles = onPickFiles
     )
@@ -153,7 +176,9 @@ private fun WideChatLayout(
   state: ChatUiState,
   vm: ChatViewModel,
   onShowModels: () -> Unit,
+  onRequestRename: (String) -> Unit,
   onRequestDelete: () -> Unit,
+  onOpenSettings: () -> Unit,
   onPickImages: () -> Unit,
   onPickFiles: () -> Unit
 ) {
@@ -162,6 +187,7 @@ private fun WideChatLayout(
       state = state,
       onSelect = vm::selectConversation,
       onNew = vm::newConversation,
+      onRequestRename = onRequestRename,
       onRequestDelete = { conversationId ->
         if (conversationId != state.selectedConversationId) {
           vm.selectConversation(conversationId)
@@ -169,6 +195,7 @@ private fun WideChatLayout(
         onRequestDelete()
       },
       onRefreshModels = vm::refreshModels,
+      onOpenSettings = onOpenSettings,
       onLogout = vm::logout,
       modifier = Modifier
         .width(288.dp)
@@ -182,7 +209,9 @@ private fun WideChatLayout(
       onMenuClick = {},
       onShowModels = onShowModels,
       onNewConversation = vm::newConversation,
+      onRequestRename = { state.selectedConversationId?.let(onRequestRename) },
       onRequestDelete = onRequestDelete,
+      onOpenSettings = onOpenSettings,
       onPickImages = onPickImages,
       onPickFiles = onPickFiles,
       modifier = Modifier.weight(1f)
@@ -198,7 +227,9 @@ private fun ChatScaffold(
   onMenuClick: () -> Unit,
   onShowModels: () -> Unit,
   onNewConversation: () -> Unit,
+  onRequestRename: () -> Unit,
   onRequestDelete: () -> Unit,
+  onOpenSettings: () -> Unit,
   onPickImages: () -> Unit,
   onPickFiles: () -> Unit,
   modifier: Modifier = Modifier
@@ -213,8 +244,10 @@ private fun ChatScaffold(
         onMenuClick = onMenuClick,
         onShowModels = onShowModels,
         onNewConversation = onNewConversation,
+        onRequestRename = onRequestRename,
         onRequestDelete = onRequestDelete,
         onRefreshModels = vm::refreshModels,
+        onOpenSettings = onOpenSettings,
         onLogout = vm::logout
       )
       HorizontalDivider(color = AppColors.Border)
@@ -239,6 +272,7 @@ private fun ChatScaffold(
       FeedbackBanner(state, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
       MessageList(
         state = state,
+        onLoadAttachmentBytes = vm::loadAttachmentBytes,
         modifier = Modifier.weight(1f)
       )
     }

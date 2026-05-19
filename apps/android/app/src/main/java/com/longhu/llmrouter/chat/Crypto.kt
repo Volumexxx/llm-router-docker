@@ -90,6 +90,7 @@ class SecurePrefs(context: Context, private val cryptoManager: CryptoManager) {
     const val GatewayKeyId = "gateway_key_id"
     const val GatewayKeyPlaintext = "gateway_key_plaintext"
     const val DefaultModelAlias = "default_model_alias"
+    const val ModelRuntimeSettings = "model_runtime_settings"
     const val DbPassphrase = "db_passphrase"
   }
 }

@@ -7,6 +7,11 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.Modifier
@@ -32,6 +37,12 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun LlmRouterChatApp(vm: ChatViewModel) {
   val state = vm.state
+  var screen by remember { mutableStateOf(AppScreen.Chat) }
+  LaunchedEffect(state.user?.id) {
+    if (state.user == null) {
+      screen = AppScreen.Chat
+    }
+  }
   if (state.loading) {
     CenterText("正在恢复登录状态...")
     return
@@ -39,9 +50,16 @@ fun LlmRouterChatApp(vm: ChatViewModel) {
 
   if (state.user == null) {
     LoginScreen(state, vm)
+  } else if (screen == AppScreen.Settings) {
+    SettingsScreen(state, vm, onBack = { screen = AppScreen.Chat })
   } else {
-    ChatScreen(state, vm)
+    ChatScreen(state, vm, onOpenSettings = { screen = AppScreen.Settings })
   }
+}
+
+private enum class AppScreen {
+  Chat,
+  Settings
 }
 
 @Composable
